@@ -25,6 +25,17 @@ Lần đầu mở, SkinForge hỏi vai trò (nhớ trên máy, đổi được �
 | **Animation** | Spine (`.json` / `.skel` / `.atlas`), Lottie (`.json` / `.lottie`), sprite sheet (TexturePacker `.json` / `.plist`), DragonBones, Unity `.anim` / `.controller` — `.json` chỉ được nhận khi nội dung đúng là animation | Anim (trong brief, nguyên định dạng; có nút tải file gốc) | cùng định dạng và loại; **còn đủ tên animation / skin / frame / state mà game gọi**; fps, độ dài, texture; khi áp dụng thì chép nguyên file |
 | **Âm thanh** | `.mp3 .ogg .wav .m4a .aac` | Game Design (không vào brief) | cùng định dạng với file gốc; độ dài và dung lượng gần bằng; nghe thử gốc/mới; khi áp dụng thì chép nguyên file |
 
+## Màn / popup và yêu cầu
+
+Game Design nhóm asset theo nơi chúng xuất hiện trong game (Popup Complete, Popup Out of Moves, Shop, Main Menu… — có
+gợi ý nhanh), rồi ghi yêu cầu cho từng màn:
+
+- **Gán asset:** bấm “Chọn để gán vào màn”, chọn nhiều thẻ (một bộ ảnh tính là một thẻ), chọn màn → **Gán**. Một asset
+  có thể thuộc nhiều màn; thẻ hiện chip tên màn.
+- **Yêu cầu Art** và **Yêu cầu Anim**: mô tả tự do + **ảnh ref** (kéo vào hoặc chọn file; bấm ảnh để xem lớn).
+- Lưu trong `<game>/.reskin/project.json` (màn, asset, mô tả) và `<game>/.reskin/refs/<màn>/<art|anim>/` (ảnh ref).
+- **Đi theo brief:** Artist / Anim chọn màn ở cột trái để xem mô tả + ref (chỉ đọc) và chỉ các asset của màn đó.
+
 ## Luồng làm việc
 
 1. **Mở thư mục game** (Chrome/Edge). SkinForge nhận diện engine (Falcon IDE, GameKit, Vite, Unity, Godot…), tìm thư

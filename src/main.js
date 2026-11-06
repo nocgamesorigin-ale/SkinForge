@@ -2,6 +2,7 @@ import './style.css';
 import * as F from './fsx.js';
 import { render, toPNG, fmtBytes, fmtSec } from './imaging.js';
 import { animTypeLabel } from './anim.js';
+import * as SC from './screens.js';
 import { RULES, SAFE, KINDS, kindOf, isRaw, buildSlots, findSets, defaultGroups, matcher, makeReskin, checkAll, autoFit, summary } from './project.js';
 import { makeZip, readZip, download } from './zipx.js';
 
@@ -21,7 +22,8 @@ const STATUS = {
 };
 
 // mode: 'gd' (Game Design: owns the game folders) | 'artist' (opens brief packs only) | null (not chosen yet)
-const app = { screen: 'home', mode: F.pref.get('mode'), project: null, filter: 'all', kind: 'all', group: null, search: '', recent: [], jobs: [], detail: null, safe: true };
+const app = { screen: 'home', mode: F.pref.get('mode'), project: null, filter: 'all', kind: 'all', group: null, search: '', recent: [], jobs: [], detail: null, safe: true,
+  screenSel: null, selecting: false, selected: new Set(), lightbox: null };
 const urls = new Map();   // slot id → object URL of the original
 const thumbUrls = new Map();   // job id → [object URLs]
 const root = $('#app');
@@ -29,9 +31,11 @@ document.documentElement.dataset.mode = app.mode || '';
 
 /* ---------------- rendering ---------------- */
 function draw() {
+  app._scIndex = null;   // screen → asset index, rebuilt lazily per render
   root.innerHTML = app.screen !== 'home' ? workspaceView() : !app.mode ? modePickerView() : app.mode === 'gd' ? homeGDView() : homeArtistView();
   if (app.detail) root.insertAdjacentHTML('beforeend', detailView());
   if (app.apply) root.insertAdjacentHTML('beforeend', applyView());
+  if (app.lightbox) root.insertAdjacentHTML('beforeend', `<div class="modal lightbox" data-act="close-lightbox" role="dialog" aria-modal="true" aria-label="Ảnh ref"><img src="${app.lightbox}" alt="Ảnh ref"><button class="iconbtn" data-act="close-lightbox" aria-label="Đóng">${ICON.close}</button></div>`);
 }
 function toast(msg, kind = '') {
   const t = document.createElement('div'); t.className = `toast ${kind}`; t.textContent = msg; document.body.appendChild(t);
@@ -190,9 +194,12 @@ function homeArtistView() {
 function cardsOf(p) {
   const cards = [];
   const seen = new Set();
+  const sc = app.screenSel && p.screens.find((x) => x.id === app.screenSel);
+  const inScreen = sc ? new Set(sc.slots) : null;
   for (const s of p.slots) {
     if (app.group && s.group !== app.group) continue;
     if (app.kind !== 'all' && s.kind !== app.kind) continue;
+    if (inScreen && !inScreen.has(s.id)) continue;
     if (s.set) {
       if (seen.has(s.set)) continue; seen.add(s.set);
       cards.push({ type: 'set', id: s.set, set: p.sets[s.set], slots: p.sets[s.set].members.map((id) => p.slotById.get(id)) });
@@ -230,7 +237,7 @@ function animCard(p, c) {
     <div class="anim-box"><small>GỐC</small><b>${esc(animMeta(s))}</b><span>${esc(namesLine(s)) || '—'}</span></div>
     <div class="anim-box ${r ? '' : 'empty'}"><small>MỚI</small>${r ? `<b>${esc(r.animType ? animMeta(r) : 'Không nhận ra định dạng')}</b><span>${esc(namesLine(r)) || '—'}</span>`
       : `<label class="snd-drop">${ICON.upload} Chọn file .${s.ext}<input type="file" accept="${ANIM_ACCEPT}" data-act="pick-one" data-id="${esc(s.id)}" hidden></label>`}</div>
-    <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${kindBadge('anim')}
+    <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${screenChips(p, c)}${kindBadge('anim')}
       <button class="link small" data-act="dl-original" data-id="${esc(s.id)}">Tải file gốc</button>
       <button class="link small" data-act="detail" data-id="${esc(c.id)}">Chi tiết</button></div>
   </div>`;
@@ -264,6 +271,67 @@ function animDetailView(p, s) {
 }
 const kindBadge = (k) => `<span class="kind ${k}">${KINDS[k].label}</span>`;
 
+/* ---------- screens / popups ---------- */
+function screenChips(p, c) {
+  const idx = app._scIndex || (app._scIndex = SC.screenIndex(p.screens));
+  const names = [...new Set(c.slots.flatMap((s) => idx.get(s.id) || []))];
+  return names.length ? `<span class="scchips">${names.slice(0, 2).map((n) => `<span class="scchip">${esc(n)}</span>`).join('')}${names.length > 2 ? `<span class="scchip">+${names.length - 2}</span>` : ''}</span>` : '';
+}
+/** Mark a rendered card for multi-select (class + data-card), whatever its type. */
+function decorate(html, c) {
+  const cls = `${app.selecting ? 'selecting ' : ''}${app.selected.has(c.id) ? 'picked ' : ''}`;
+  return html.replace(/^(\s*<(?:button|div) class="card )/, `$1${cls}`).replace(/^(\s*<(?:button|div) class="card [^"]*")/, `$1 data-card="${esc(c.id)}"`);
+}
+
+function screensSide(p) {
+  const gd = p.kind === 'folder';
+  const items = p.screens.map((sc) => `<button class="gbtn ${app.screenSel === sc.id ? 'on' : ''}" data-act="select-screen" data-id="${sc.id}">
+      <span><span>${esc(sc.name)}</span><small class="rule">${[sc.art.text || sc.art.refs.length ? 'Art' : '', sc.anim.text || sc.anim.refs.length ? 'Anim' : ''].filter(Boolean).join(' · ') || (gd ? 'Chưa có yêu cầu' : '')}</small></span>
+      <span class="muted small">${sc.slots.length}</span></button>`).join('');
+  const unused = SC.PRESETS.filter((n) => !p.screens.some((s) => s.name === n));
+  return `<span class="label">MÀN / POPUP</span>
+    ${items || `<span class="muted small side-note">${gd ? 'Nhóm asset theo nơi xuất hiện trong game để ghi yêu cầu cho Art / Anim.' : 'Game Design chưa chia asset theo màn / popup.'}</span>`}
+    ${gd ? `<button class="link small side-note" data-act="add-screen">+ Thêm màn / popup</button>
+      ${unused.length && p.screens.length < 3 ? `<div class="presets">${unused.slice(0, 6).map((n) => `<button class="preset" data-act="add-preset" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}` : ''}
+    <div class="side-sep"></div>`;
+}
+
+function reqPanel(p) {
+  const sc = p.screens.find((x) => x.id === app.screenSel); if (!sc) return '';
+  const gd = p.kind === 'folder';
+  const role = (key) => {
+    const r = sc[key];
+    const refs = r.refs.map((f) => `<span class="ref"><button class="ref-img" data-act="open-ref" data-url="${f.url}" aria-label="Xem ${esc(f.name)}"><img src="${f.url}" alt="${esc(f.name)}"></button>
+        ${gd ? `<button class="ref-del" data-act="del-ref" data-role="${key}" data-name="${esc(f.name)}" aria-label="Xoá ${esc(f.name)}">${ICON.close}</button>` : ''}</span>`).join('');
+    return `<div class="req ${key}">
+      <div class="req-h"><b>${SC.ROLES[key]}</b><span class="muted small">${key === 'art' ? 'Artist · ảnh tĩnh' : 'Anim · effect + file animation'}</span></div>
+      ${gd ? `<textarea data-act="req-text" data-role="${key}" rows="4" placeholder="${key === 'art' ? 'Ví dụ: đổi theme sang Giáng sinh, nút xanh lá, banner có tuyết…' : 'Ví dụ: hiệu ứng sao bay khi thắng, popup bật ra 0.3s…'}">${esc(r.text)}</textarea>`
+        : `<div class="req-text">${r.text ? esc(r.text).replace(/\n/g, '<br>') : '<span class="muted">Không có yêu cầu riêng.</span>'}</div>`}
+      <div class="refs">${refs}${gd ? `<label class="ref add">${ICON.upload}<span>Ảnh ref</span><input type="file" accept="image/*" multiple data-act="add-ref" data-role="${key}" hidden></label>` : ''}</div>
+    </div>`;
+  };
+  return `<section class="reqpanel">
+    <div class="reqpanel-h"><div><b>${esc(sc.name)}</b><span class="muted small"> · ${sc.slots.length} asset</span></div>
+      ${gd ? `<div class="row"><button class="link small" data-act="rename-screen">Đổi tên</button><button class="link small danger" data-act="del-screen">Xoá màn</button></div>` : ''}</div>
+    <div class="reqs">${role('art')}${role('anim')}</div>
+  </section>`;
+}
+
+function selectBar(p) {
+  if (!app.selecting) return '';
+  const n = app.selected.size;
+  return `<div class="selbar" role="region" aria-label="Gán asset vào màn / popup">
+    <b>Đã chọn ${n}</b>
+    <label class="sr" for="assignTo">Gán vào</label>
+    <select id="assignTo"><option value="">Gán vào màn / popup…</option>${p.screens.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}<option value="__new">+ Màn / popup mới…</option></select>
+    <button class="btn primary" data-act="assign" ${n ? '' : 'disabled'}>Gán</button>
+    ${app.screenSel ? `<button class="btn" data-act="unassign" ${n ? '' : 'disabled'}>Bỏ khỏi màn này</button>` : ''}
+    <button class="link small" data-act="select-all">Chọn tất cả đang hiện</button>
+    <span class="grow"></span>
+    <button class="btn" data-act="toggle-select">Xong</button>
+  </div>`;
+}
+
 function soundCard(p, c) {
   const s = c.slots[0], r = p.reskins.get(s.id);
   return `<div class="card sound ${STATUS[c.status].cls}">
@@ -272,7 +340,7 @@ function soundCard(p, c) {
     <div class="snd-row"><small>GỐC</small><audio controls preload="none" src="${origUrl(s)}"></audio></div>
     <div class="snd-row"><small>MỚI</small>${r ? `<audio controls preload="none" src="${r.preview}"></audio>`
       : `<label class="snd-drop">${ICON.upload} Chọn file .${s.ext}<input type="file" accept="audio/*" data-act="pick-one" data-id="${esc(s.id)}" hidden></label>`}</div>
-    <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${kindBadge('sound')}
+    <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${screenChips(p, c)}${kindBadge('sound')}
       <button class="link small" data-act="detail" data-id="${esc(c.id)}">Chi tiết</button></div>
   </div>`;
 }
@@ -302,8 +370,9 @@ function workspaceView() {
   </div>
   <div class="ws">
     <aside class="side">
-      <span class="label">NHÓM ASSET</span>
-      <button class="gbtn ${!app.group ? 'on' : ''}" data-act="group" data-g=""><span>Tất cả</span><span class="muted small">${p.slots.length}</span></button>
+      ${screensSide(p)}
+      <span class="label">THƯ MỤC ASSET</span>
+      <button class="gbtn ${!app.group && !app.screenSel ? 'on' : ''}" data-act="group" data-g=""><span>Tất cả</span><span class="muted small">${p.slots.length}</span></button>
       ${groups.map((g) => `<div class="gitem ${app.group === g.name ? 'on' : ''}">
         <button class="gbtn" data-act="group" data-g="${esc(g.name)}"><span><span>${esc(g.name)}</span><small class="rule ${g.rule}">${RULES[g.rule].label}${g.sets ? ` · ${g.sets} bộ` : ''}</small></span><span class="muted small">${g.count}</span></button>
         ${p.kind === 'folder' && (g.rule === 'free' || g.rule === 'fixed') ? `<button class="link small" data-act="toggle-rule" data-g="${esc(g.name)}">Đổi thành “${RULES[g.rule === 'free' ? 'fixed' : 'free'].label}”</button>` : ''}
@@ -312,6 +381,7 @@ function workspaceView() {
         <br><br><b>Quy tắc</b><br><b>Khung tự do:</b> ${RULES.free.hint} Ảnh trong một bộ phải khớp nhau, không cần khớp ảnh gốc.<br><b>Giữ tỉ lệ khung:</b> ${RULES.fixed.hint}${p.kind === 'folder' ? `<br><b>Âm thanh:</b> ${RULES.sound.hint}` : ''}</div>
     </aside>
     <main class="main">
+      ${reqPanel(p)}
       <div class="toolbar">
         <label class="search">${'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6B7280" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>'}<span class="sr">Tìm asset</span><input type="search" data-act="search" placeholder="Tìm theo tên file, ví dụ bag_1" value="${esc(app.search)}"></label>
         <div class="seg kinds" role="group" aria-label="Lọc theo loại">
@@ -324,26 +394,28 @@ function workspaceView() {
           ${[['all', 'Tất cả'], ['missing', 'Chưa có'], ['error', 'Lỗi'], ['warn', 'Cảnh báo'], ['ok', 'Đạt']].map(([k, l]) => `<button class="${app.filter === k ? 'on' : ''}" data-act="filter" data-f="${k}">${l}</button>`).join('')}
         </div>
         <span class="muted small grow">Kéo thả ảnh, thư mục hoặc file zip vào đây — tự khớp theo tên file</span>
+        ${p.kind === 'folder' ? `<button class="btn ${app.selecting ? 'primary' : ''}" data-act="toggle-select">${app.selecting ? 'Đang chọn…' : 'Chọn để gán vào màn'}</button>` : ''}
       </div>
       <div class="cards">
         ${cards.slice(0, app.limit || 120).map((c) => {
           const s = rep(c), r = p.reskins.get(s.id);
-          if (s.kind === 'sound') return soundCard(p, c);
-          if (s.kind === 'anim') return animCard(p, c);
-          return `<button class="card ${STATUS[c.status].cls}" data-act="detail" data-id="${esc(c.id)}">
+          if (s.kind === 'sound') return decorate(soundCard(p, c), c);
+          if (s.kind === 'anim') return decorate(animCard(p, c), c);
+          return decorate(`<button class="card ${STATUS[c.status].cls}" data-act="detail" data-id="${esc(c.id)}">
             <div class="card-h"><div><b class="mono">${esc(c.type === 'set' ? c.set.name : s.key)}</b><span class="muted small">${esc(s.dir || '(gốc)')} · ${s.w}×${s.h}${c.type === 'set' ? ` · bộ ${c.slots.length} ảnh` : ''}</span></div><span class="badge ${STATUS[c.status].cls}">${STATUS[c.status].label}</span></div>
             <div class="pair">
               <figure><figcaption>GỐC</figcaption><div class="thumb checker"><img src="${origUrl(s)}" alt="" loading="lazy"></div></figure>
               <figure><figcaption>RESKIN</figcaption>${r?.preview ? `<div class="thumb checker"><img src="${r.preview}" alt=""></div>` : `<div class="thumb drop">${ICON.upload}<span>Kéo thả ${c.slots.length > 1 ? c.slots.length + ' ảnh' : 'ảnh'}</span></div>`}</figure>
             </div>
             ${c.type === 'set' ? `<div class="dots">${c.dots.map((d) => `<i class="${STATUS[d].cls}"></i>`).join('')}</div>` : ''}
-            <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${s.kind === 'fx' ? kindBadge('fx') : ''}</div>
-          </button>`;
-        }).join('') || '<div class="empty">Không có asset nào khớp bộ lọc.</div>'}
+            <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${screenChips(p, c)}${s.kind === 'fx' ? kindBadge('fx') : ''}</div>
+          </button>`, c);
+        }).join('') || `<div class="empty">${app.screenSel ? (p.kind === 'folder' ? 'Màn này chưa có asset. Bấm “Chọn để gán vào màn”, chọn các thẻ rồi bấm Gán.' : 'Màn này chưa có asset nào.') : 'Không có asset nào khớp bộ lọc.'}</div>`}
       </div>
       ${cards.length > (app.limit || 120) ? `<button class="btn center" data-act="more">Hiện thêm (${cards.length - (app.limit || 120)})</button>` : ''}
     </main>
   </div>
+  ${selectBar(p)}
   <div class="dropveil" aria-hidden="true"><div>${ICON.upload}<b>Thả để nhập ${p.kind === 'folder' ? 'ảnh / âm thanh' : 'ảnh'}</b><span>File, thư mục hoặc zip — khớp theo tên file</span></div></div>`;
 }
 
@@ -490,6 +562,7 @@ async function openFolder(handle) {
       for (const [g, v] of Object.entries(saved.groups || {})) if (p.groups[g]) p.groups[g].rule = v.rule;
       p.fits = saved.fits || {};
       p.lastBackup = saved.lastBackup || null;
+      p.screens = await SC.revive(saved.screens, SC.folderRef.read(handle));
     }
     // reskins imported earlier are kept as the artist's masters in .reskin/source/
     const src = await F.tryGetDir(handle, '.reskin/source');
@@ -516,12 +589,13 @@ async function openFolder(handle) {
 
 function newProject(o) {
   const sets = findSets(o.slots);
-  return { reskins: new Map(), fits: {}, lastBackup: null, ...o, sets, groups: defaultGroups(o.slots, sets), slotById: new Map(o.slots.map((s) => [s.id, s])) };
+  return { reskins: new Map(), fits: {}, lastBackup: null, screens: [], ...o, sets, groups: defaultGroups(o.slots, sets), slotById: new Map(o.slots.map((s) => [s.id, s])) };
 }
 
 async function finishLoad(p) {
   urls.forEach((u) => u && URL.revokeObjectURL(u)); urls.clear();
   app.project = p; app.group = null; app.filter = 'all'; app.kind = 'all'; app.search = ''; app.detail = null; app.apply = null; app.limit = 120;
+  app.screenSel = null; app.selecting = false; app.selected.clear(); app.lightbox = null;
   checkAll(p);
   await refreshPreviews(p, [...p.reskins.keys()]);
   app.screen = 'workspace'; draw();
@@ -546,7 +620,8 @@ async function saveMeta() {
   if (p.kind === 'brief') return saveJob();
   if (p.kind !== 'folder') return;
   const groups = Object.fromEntries(Object.values(p.groups).map((g) => [g.name, { rule: g.rule }]));
-  await F.writeJSON(p.root, '.reskin/project.json', { tool: 'SkinForge', version: 1, assetRoot: p.assetRoot, groups, fits: p.fits, lastBackup: p.lastBackup });
+  await F.writeJSON(p.root, '.reskin/project.json', { tool: 'SkinForge', version: 1, assetRoot: p.assetRoot, groups, fits: p.fits, lastBackup: p.lastBackup,
+    screens: SC.serialize(p.screens) });
 }
 
 /* ---------------- importing reskins ---------------- */
@@ -630,6 +705,9 @@ async function exportBrief() {
       animType, names, skins, fps, duration, frames, textures, label, bones, version, tags }) =>
       ({ id, key, name, dir, ext, group, kind, w, h, alpha, bytes, fill, set, idx,
         ...(kind === 'anim' ? { animType, names, skins, fps, duration, frames, textures, label, bones, version, tags } : {}) })) };
+  // screens / popups with the Art + Anim requests travel with the brief; their ref images go in refs/
+  brief.screens = SC.serialize(p.screens, new Set(slots.map((s) => s.id)));
+  for (const sc of p.screens) for (const role of Object.keys(SC.ROLES)) for (const r of sc[role].refs) files[`refs/${SC.refPath(sc, role, r.name)}`] = r.blob;
   files['brief.json'] = JSON.stringify(brief, null, 2);
   files['HUONG-DAN.txt'] = [
     `Gói brief reskin: ${p.name} (${slots.length - nFx - nAnim} art, ${nFx} effect, ${nAnim} file animation)`, '',
@@ -685,6 +763,7 @@ async function loadJob(job, z) {
     slots: brief.slots.filter((s) => s.kind !== 'sound').map((s) => ({ ...s, kind: s.kind || kindOf(s.id), set: undefined, idx: undefined })), files });
   for (const [g, v] of Object.entries(brief.groups || {})) if (p.groups[g]) p.groups[g].rule = v.rule;
   p.fits = job.fits || {};
+  p.screens = await SC.revive(brief.screens, async (path) => z[`refs/${path}`] || null);
   let i = 0;
   for (const r of job.reskins || []) {
     if (p.slotById.has(r.id)) p.reskins.set(r.id, await makeReskin(r.blob, r.name));
@@ -815,9 +894,64 @@ async function undoApply() {
 }
 
 /* ---------------- events ---------------- */
+function cardSlotIds(p, id) { return p.sets[id] ? p.sets[id].members : [id]; }
+async function addScreen(name) {
+  const p = app.project; name = (name || '').trim(); if (!name) return null;
+  const sc = SC.newScreen(name); p.screens.push(sc); app.screenSel = sc.id; app.group = null;
+  await saveMeta(); return sc;
+}
+async function assignSelected(sc) {
+  const p = app.project, ids = [...app.selected].flatMap((id) => cardSlotIds(p, id));
+  const before = sc.slots.length; sc.slots = [...new Set([...sc.slots, ...ids])];
+  await saveMeta(); toast(`Đã gán ${sc.slots.length - before} asset vào “${sc.name}”`, 'ok');
+}
+
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'INPUT') return;
+  // multi-select: a click anywhere on a card toggles it (players and file pickers keep working)
+  if (app.selecting && app.screen === 'workspace' && !app.detail) {
+    const card = e.target.closest('.card[data-card]');
+    if (card && !e.target.closest('audio, input, label, [data-act="dl-original"]')) {
+      e.preventDefault();
+      const id = card.dataset.card; app.selected.has(id) ? app.selected.delete(id) : app.selected.add(id); draw(); return;
+    }
+  }
+  const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
   const act = el.dataset.act, p = app.project;
+  const curScreen = () => p?.screens.find((x) => x.id === app.screenSel);
+  if (act === 'select-screen') { app.screenSel = app.screenSel === el.dataset.id ? null : el.dataset.id; app.group = null; draw(); }
+  if (act === 'add-screen') { const sc = await addScreen(prompt('Tên màn / popup (ví dụ: Popup Complete, Shop)')); if (sc) draw(); }
+  if (act === 'add-preset') { await addScreen(el.dataset.name); draw(); }
+  if (act === 'rename-screen') { const sc = curScreen(); const n = sc && prompt('Đổi tên màn / popup', sc.name); if (n?.trim()) { sc.name = n.trim(); await saveMeta(); draw(); } }
+  if (act === 'del-screen') {
+    const sc = curScreen();
+    if (sc && confirm(`Xoá “${sc.name}”? Asset không bị xoá, chỉ bỏ nhóm và yêu cầu của màn này.`)) {
+      if (p.kind === 'folder') await SC.folderRef.removeScreen(p.root, sc.id);
+      for (const role of Object.keys(SC.ROLES)) sc[role].refs.forEach((r) => URL.revokeObjectURL(r.url));
+      p.screens = p.screens.filter((x) => x !== sc); app.screenSel = null; await saveMeta(); draw();
+    }
+  }
+  if (act === 'toggle-select') { app.selecting = !app.selecting; app.selected.clear(); draw(); }
+  if (act === 'select-all') { cardsOf(p).slice(0, app.limit || 120).forEach((c) => app.selected.add(c.id)); draw(); }
+  if (act === 'assign') {
+    const v = $('#assignTo')?.value;
+    const sc = v === '__new' ? await addScreen(prompt('Tên màn / popup mới')) : p.screens.find((x) => x.id === v);
+    if (!sc) { toast('Chọn màn / popup để gán', 'warn'); return; }
+    await assignSelected(sc); app.selected.clear(); draw();
+  }
+  if (act === 'unassign') {
+    const sc = curScreen(); if (!sc) return;
+    const drop = new Set([...app.selected].flatMap((id) => cardSlotIds(p, id)));
+    sc.slots = sc.slots.filter((id) => !drop.has(id)); app.selected.clear(); await saveMeta(); draw();
+  }
+  if (act === 'del-ref') {
+    const sc = curScreen(), role = el.dataset.role, r = sc?.[role].refs.find((x) => x.name === el.dataset.name);
+    if (r) {
+      if (p.kind === 'folder') await SC.folderRef.remove(p.root, SC.refPath(sc, role, r.name));
+      URL.revokeObjectURL(r.url); sc[role].refs = sc[role].refs.filter((x) => x !== r); await saveMeta(); draw();
+    }
+  }
+  if (act === 'open-ref') { app.lightbox = el.dataset.url; draw(); }
+  if (act === 'close-lightbox') { app.lightbox = null; draw(); }
   if (el.tagName === 'A') e.preventDefault();
   if (act === 'open-folder') { try { await openFolder(await F.pickFolder()); } catch (err) { if (err.name !== 'AbortError') toast(err.message, 'error'); } }
   if (act === 'open-recent') { const rec = app.recent.find((r) => r.id === el.dataset.id); if (rec) await openFolder(rec.handle); }
@@ -844,7 +978,7 @@ document.addEventListener('click', async (e) => {
       await refreshRecent(); draw();
     }
   }
-  if (act === 'group') { app.group = el.dataset.g || null; draw(); }
+  if (act === 'group') { app.group = el.dataset.g || null; app.screenSel = null; draw(); }
   if (act === 'filter') { app.filter = el.dataset.f; draw(); }
   if (act === 'kind') { app.kind = el.dataset.k; draw(); }
   if (act === 'dl-original') { const s = p.slotById.get(el.dataset.id); const b = p.files.get(s.id); if (b) download(b, s.name); }
@@ -885,6 +1019,18 @@ document.addEventListener('change', async (e) => {
   }
   if (act === 'toggle-safe') { app.safe = el.checked; draw(); }
   if (act === 'opt-backup') app.apply.backup = el.checked;
+  if (act === 'req-text' || act === 'add-ref') {
+    const p = app.project, sc = p.screens.find((x) => x.id === app.screenSel), role = el.dataset.role;
+    if (sc && act === 'req-text') { sc[role].text = el.value; await saveMeta(); }
+    if (sc && act === 'add-ref') {
+      for (const file of [...el.files].filter((f) => f.type.startsWith('image/'))) {
+        const name = SC.refName(sc[role].refs, file);
+        if (p.kind === 'folder') await SC.folderRef.write(p.root, SC.refPath(sc, role, name), file);
+        sc[role].refs.push({ name, blob: file, url: URL.createObjectURL(file) });
+      }
+      await saveMeta(); draw();
+    }
+  }
   el.value && el.type === 'file' && (el.value = '');
 });
 document.addEventListener('input', (e) => {
@@ -892,7 +1038,11 @@ document.addEventListener('input', (e) => {
   app.search = e.target.value;
   clearTimeout(app._t); app._t = setTimeout(() => { const pos = e.target.selectionStart; draw(); const i = $('[data-act="search"]'); i?.focus(); i?.setSelectionRange(pos, pos); }, 200);
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (app.detail || app.apply)) { app.detail = null; app.apply = null; draw(); } });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (app.lightbox) { app.lightbox = null; draw(); } else if (app.detail || app.apply) { app.detail = null; app.apply = null; draw(); }
+  else if (app.selecting) { app.selecting = false; app.selected.clear(); draw(); }
+});
 let dragDepth = 0;
 addEventListener('dragenter', (e) => { if (app.screen !== 'workspace') return; e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
 addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
