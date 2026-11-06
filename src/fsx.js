@@ -5,6 +5,8 @@ export const fsSupported = 'showDirectoryPicker' in window;
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.reskin', '.falcon', '.falcon-publish', 'Library', 'Temp', 'Logs', 'obj', 'build', '.idea', '.vscode']);
 export const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp']);
+export const AUDIO_EXT = new Set(['mp3', 'ogg', 'wav', 'm4a', 'aac']);
+export const ASSET_EXT = new Set([...IMAGE_EXT, ...AUDIO_EXT]);
 
 export const ext = (name) => (name.match(/\.([^.]+)$/)?.[1] || '').toLowerCase();
 export const stem = (name) => name.replace(/\.[^.]+$/, '');
@@ -50,13 +52,13 @@ export async function readJSON(root, path) {
 }
 export const writeJSON = (root, path, data) => writeFile(root, path, new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
 
-/** Every image file under `dir`, as { path, file }. */
+/** Every image and sound file under `dir`, as { path, file }. */
 export async function walkImages(dir, prefix = '', out = []) {
   for await (const [name, h] of dir.entries()) {
     if (h.kind === 'directory') {
       if (SKIP_DIRS.has(name) || name.startsWith('.')) continue;
       await walkImages(h, prefix + name + '/', out);
-    } else if (IMAGE_EXT.has(ext(name))) {
+    } else if (ASSET_EXT.has(ext(name))) {
       out.push({ path: prefix + name, file: await h.getFile() });
     }
   }

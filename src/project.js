@@ -1,6 +1,15 @@
 // Project model: asset slots, groups and their rules, image sets, reskins and the checks.
-import { analyze, placement } from './imaging.js';
-import { ext, stem } from './fsx.js';
+import { analyze, analyzeAudio, placement, fmtSec } from './imaging.js';
+import { ext, stem, AUDIO_EXT } from './fsx.js';
+
+/** Who reskins what: art + effects go to the Artist / Anim brief; sound stays with Game Design. */
+export const KINDS = {
+  art: { label: 'Art', owner: 'Artist' },
+  fx: { label: 'Effect', owner: 'Anim' },
+  sound: { label: 'Âm thanh', owner: 'Game Design' },
+};
+const FX_RE = /(^|[\/_\-\s.])(fx|vfx|effects?|particles?|anim(ation)?s?|sparkles?|splash|glow|smoke|explosions?|shine|rays?|trail|flare)([\/_\-\s.\d]|$)/i;
+export const kindOf = (path) => AUDIO_EXT.has(ext(path)) ? 'sound' : FX_RE.test(path) ? 'fx' : 'art';
 
 /*
  Slot  = one image the game uses: { id: "items/bag_1_0.webp", key: "bag_1_0", dir, ext, group, w, h, alpha, bytes, set, idx }
@@ -13,6 +22,7 @@ import { ext, stem } from './fsx.js';
 export const RULES = {
   free: { label: 'Khung tự do', hint: 'Dáng và kích thước món đồ tự do; ảnh được co vừa khung, không méo.' },
   fixed: { label: 'Giữ tỉ lệ khung', hint: 'Giữ tỉ lệ khung hình như ảnh gốc (sai số 2%).' },
+  sound: { label: 'Âm thanh · giữ định dạng', hint: 'File mới cùng định dạng với file gốc (mp3 → mp3); độ dài nên gần bằng.' },
 };
 export const SAFE = { min: 0.7, max: 0.9, warnMin: 0.6, warnMax: 0.98, fill: 0.86 };
 
@@ -25,12 +35,16 @@ export async function buildSlots(entries, onProgress) {
     while (queue.length) {
       const e = queue.shift();
       try {
-        const a = await analyze(e.blob);
         const parts = e.path.split('/'); const name = parts.pop();
-        slots.push({ id: e.path, key: stem(name), name, dir: parts.join('/'), ext: ext(name), group: parts[0] || '(gốc)',
-          w: a.w, h: a.h, alpha: a.alpha, bytes: e.blob.size,
-          fill: +Math.max(a.bbox.w, a.bbox.h).toFixed(3) });   // how much of its frame the original's content fills
-      } catch { /* unreadable image: skip */ }
+        const base = { id: e.path, key: stem(name), name, dir: parts.join('/'), ext: ext(name), group: parts[0] || '(gốc)', bytes: e.blob.size, kind: kindOf(e.path) };
+        if (base.kind === 'sound') {
+          slots.push({ ...base, ...(await analyzeAudio(e.blob)) });
+        } else {
+          const a = await analyze(e.blob);
+          slots.push({ ...base, w: a.w, h: a.h, alpha: a.alpha,
+            fill: +Math.max(a.bbox.w, a.bbox.h).toFixed(3) });   // how much of its frame the original's content fills
+        }
+      } catch { /* unreadable file: skip */ }
       onProgress?.(++done, entries.length);
     }
   };
@@ -43,6 +57,7 @@ export async function buildSlots(entries, onProgress) {
 export function findSets(slots) {
   const buckets = new Map();
   for (const s of slots) {
+    if (s.kind === 'sound') continue;
     const m = s.key.match(/^(.+)_(\d+)$/);
     if (!m) continue;
     const k = `${s.dir}/${m[1]}`;
@@ -65,9 +80,10 @@ export function findSets(slots) {
 export function defaultGroups(slots, sets) {
   const groups = {};
   for (const s of slots) {
-    const g = (groups[s.group] ||= { name: s.group, count: 0, sets: 0, rule: 'fixed' });
-    g.count++;
+    const g = (groups[s.group] ||= { name: s.group, count: 0, sets: 0, rule: 'fixed', sounds: 0 });
+    g.count++; if (s.kind === 'sound') g.sounds++;
   }
+  for (const g of Object.values(groups)) if (g.sounds === g.count) g.rule = 'sound';
   const inSets = {};
   for (const set of Object.values(sets)) { groups[set.group].sets++; inSets[set.group] = (inSets[set.group] || 0) + set.members.length; }
   // "free frame" only where image sets make up most of the folder (items), not for a UI folder
@@ -78,14 +94,16 @@ export function defaultGroups(slots, sets) {
 
 /** Find the slot a dropped file belongs to: by relative path first, then by file name. */
 export function matcher(slots) {
-  const byPath = new Map(), byKey = new Map();
+  // images and sounds are looked up separately: ui/coin.webp and snd/coin.mp3 must not collide
+  const maps = { image: { byPath: new Map(), byKey: new Map() }, sound: { byPath: new Map(), byKey: new Map() } };
   for (const s of slots) {
-    byPath.set(`${s.dir ? s.dir + '/' : ''}${s.key}`.toLowerCase(), s);
-    const k = s.key;
-    byKey.set(k, byKey.has(k) ? null : s);   // null = ambiguous name
+    const m = maps[s.kind === 'sound' ? 'sound' : 'image'];
+    m.byPath.set(`${s.dir ? s.dir + '/' : ''}${s.key}`.toLowerCase(), s);
+    m.byKey.set(s.key, m.byKey.has(s.key) ? null : s);   // null = ambiguous name
   }
   return (path) => {
     const clean = path.replace(/\\/g, '/').replace(/^\/+/, '');
+    const { byPath, byKey } = maps[AUDIO_EXT.has(ext(clean)) ? 'sound' : 'image'];
     const noExt = clean.replace(/\.[^./]+$/, '');
     const segs = noExt.split('/');
     for (let i = 0; i < segs.length; i++) {
@@ -101,8 +119,20 @@ export function matcher(slots) {
 }
 
 export async function makeReskin(blob, name) {
+  if (AUDIO_EXT.has(ext(name))) return { blob, name, kind: 'sound', ...(await analyzeAudio(blob)) };
   const a = await analyze(blob);
   return { blob, name, ...a };
+}
+
+function checkSound(slot, r, add) {
+  const fe = ext(r.name);
+  if (fe !== slot.ext) add('error', 'Sai định dạng', `File .${fe}, game dùng .${slot.ext} — xuất lại sang .${slot.ext} (giữ tên ${slot.key}.${slot.ext})`);
+  else add('ok', 'Định dạng', `.${fe} khớp file gốc`);
+  const d = slot.duration || 0, ratio = d ? r.duration / d : 1;
+  if (d && (ratio > 1.6 || ratio < 0.5)) add('warn', 'Độ dài khác nhiều', `${fmtSec(r.duration)} so với gốc ${fmtSec(d)} — kiểm tra nếu âm thanh được canh theo animation`);
+  else add('ok', 'Độ dài', `${fmtSec(r.duration)} (gốc ${fmtSec(d)})`);
+  if (r.blob.size > Math.max(slot.bytes * 3, slot.bytes + 300_000)) add('warn', 'File nặng hơn nhiều', `${Math.round(r.blob.size / 1024)} KB so với gốc ${Math.round(slot.bytes / 1024)} KB — nên nén (mono, bitrate thấp hơn)`);
+  if (slot.channels && r.channels !== slot.channels) add('info', 'Số kênh', `${r.channels === 1 ? 'Mono' : 'Stereo'} (gốc ${slot.channels === 1 ? 'mono' : 'stereo'})`);
 }
 
 /** Run every check for one slot's reskin; set-level checks need the other members. */
@@ -113,6 +143,13 @@ export function checkSlot(project, slot) {
   const checks = [];
   const add = (level, title, detail) => checks.push({ level, title, detail });
   add('ok', 'Tên file khớp', `${r.name} → ${slot.id}`);
+  if (slot.kind === 'sound' || r.kind === 'sound') {
+    if (slot.kind !== r.kind) add('error', 'Sai loại file', slot.kind === 'sound' ? 'Ô này là âm thanh, file nhập vào là ảnh' : 'Ô này là ảnh, file nhập vào là âm thanh');
+    else checkSound(slot, r, add);
+    const st = checks.some((c) => c.level === 'error') ? 'error' : checks.some((c) => c.level === 'warn') ? 'warn' : 'ok';
+    r.checks = checks; r.status = st;
+    return st;
+  }
 
   if (slot.alpha && !r.alpha) add('error', 'Thiếu nền trong suốt', 'Ảnh gốc có nền trong suốt; bản reskin cần PNG có kênh alpha.');
   else add('ok', slot.alpha ? 'Nền trong suốt' : 'Nền', slot.alpha ? 'Có kênh alpha' : 'Ảnh gốc không cần nền trong suốt');

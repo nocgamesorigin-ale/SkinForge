@@ -78,4 +78,13 @@ export async function toPNG(blob, name = '') {
   return encode(c, 'image/png');
 }
 
-export const fmtBytes = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : n >= 1e3 ? Math.round(n / 1e3) + ' KB' : n + ' B';
+/** Duration / channels / sample rate of a sound file (decoded in the browser). */
+let audioCtx = null;
+export async function analyzeAudio(blob) {
+  audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await audioCtx.decodeAudioData(await blob.arrayBuffer());
+  return { duration: +buf.duration.toFixed(2), channels: buf.numberOfChannels, rate: buf.sampleRate };
+}
+export const fmtSec = (s) => (s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${s.toFixed(s < 10 ? 1 : 0)}s`);
+
+export const fmtBytes =(n) => n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : n >= 1e3 ? Math.round(n / 1e3) + ' KB' : n + ' B';

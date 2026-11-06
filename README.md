@@ -10,10 +10,19 @@ Chạy hoàn toàn trong trình duyệt — **ảnh không rời khỏi máy b�
 Lần đầu mở, SkinForge hỏi vai trò (nhớ trên máy, đổi được ở công tắc trên thanh đầu):
 
 - **Game Design** — người giữ thư mục dự án (Chrome/Edge): thêm thư mục dự án, xuất brief, nhận gói reskin
-  (kéo thả `*_reskin.zip` vào trang chủ → tự mở đúng dự án), kiểm tra, áp dụng vào game. Mỗi thẻ dự án hiện trạng thái
-  (Chưa gửi brief → Đã gửi brief · chờ artist → Có gói reskin mới → Đã áp dụng) và có nhật ký hoạt động.
-- **Artist** — chỉ có **Mở gói (brief / reskin)** và **Project đang làm**. Gói brief và ảnh artist đã kéo vào được lưu
-  trong trình duyệt (IndexedDB) để mở lại làm tiếp; trạng thái Mới nhận → Đang làm → Đã gửi. Chạy trên mọi trình duyệt.
+  (kéo thả `*_reskin.zip` vào trang chủ → tự mở đúng dự án), **tự thay âm thanh**, kiểm tra, áp dụng vào game. Mỗi thẻ
+  dự án hiện trạng thái (Chưa gửi brief → Đã gửi brief · chờ artist → Có gói reskin mới → Đã áp dụng) và có nhật ký.
+- **Artist / Anim** — chỉ có **Mở gói (brief / reskin)** và **Project đang làm**. Artist làm **Art**, Anim làm **Effect**
+  (lọc riêng trong workspace). Gói brief và file đã kéo vào được lưu trong trình duyệt (IndexedDB) để mở lại làm tiếp;
+  trạng thái Mới nhận → Đang làm → Đã gửi. Chạy trên mọi trình duyệt.
+
+## Loại asset
+
+| Loại | Nhận diện | Ai làm | Kiểm tra |
+|---|---|---|---|
+| **Art** | mọi ảnh còn lại | Artist (trong brief) | theo quy tắc nhóm (khung tự do / giữ tỉ lệ) |
+| **Effect** | tên/thư mục có `fx`, `vfx`, `effect`, `particle`, `anim`, `sparkle`, `splash`, `glow`, `smoke`, `shine`, `ray`… | Anim (trong brief) | như ảnh |
+| **Âm thanh** | `.mp3 .ogg .wav .m4a .aac` | Game Design (không vào brief) | cùng định dạng với file gốc; độ dài và dung lượng gần bằng; nghe thử gốc/mới; khi áp dụng thì chép nguyên file |
 
 ## Luồng làm việc
 

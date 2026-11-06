@@ -209,6 +209,22 @@ th { text-align: left; padding: 9px; background: var(--surface-2); color: var(--
 .bar.pink i { background: var(--pink); }
 html[data-mode="artist"] .card:hover { border-color: var(--pink); }
 
+/* asset kinds: art / effect / sound */
+.kdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.kdot.art { background: #6366F1; } .kdot.fx { background: #F59E0B; } .kdot.sound { background: #0EA5E9; }
+.kind { flex: none; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; }
+.kind.art { background: var(--accent-soft); color: var(--accent-ink); } .kind.fx { background: var(--warn-soft); color: var(--warn-ink); } .kind.sound { background: var(--info-soft); color: var(--info-ink); }
+.seg button small { font-weight: 500; color: var(--muted-2); margin-left: 2px; }
+.rule.sound { color: var(--info-ink); }
+.card.sound { cursor: default; gap: 8px; }
+.snd-row { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.snd-row small { width: 34px; flex: none; font-size: 11px; font-weight: 600; color: var(--muted-2); }
+.snd-row audio { flex: 1; min-width: 0; height: 36px; }
+.snd-drop { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; height: 40px; border: 2px dashed var(--line-2); border-radius: 9px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.snd-drop svg { width: 16px; height: 16px; }
+.snd-big { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); }
+.snd-big small { font-size: 11px; font-weight: 600; color: var(--muted-2); } .snd-big audio { width: 100%; }
+
 /* overlays */
 .dropveil { position: fixed; inset: 0; z-index: 15; background: rgba(79, 70, 229, .12); border: 3px dashed var(--accent); display: none; align-items: center; justify-content: center; pointer-events: none; }
 .dropveil div { background: var(--surface); padding: 24px 32px; border-radius: 16px; display: flex; flex-direction: column; align-items: center; gap: 6px; box-shadow: 0 12px 30px rgba(0,0,0,.2); }

@@ -1,7 +1,7 @@
 import './style.css';
 import * as F from './fsx.js';
-import { render, toPNG, fmtBytes, placement } from './imaging.js';
-import { RULES, SAFE, buildSlots, findSets, defaultGroups, matcher, makeReskin, checkAll, autoFit, summary } from './project.js';
+import { render, toPNG, fmtBytes, fmtSec } from './imaging.js';
+import { RULES, SAFE, KINDS, kindOf, buildSlots, findSets, defaultGroups, matcher, makeReskin, checkAll, autoFit, summary } from './project.js';
 import { makeZip, readZip, download } from './zipx.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -20,7 +20,7 @@ const STATUS = {
 };
 
 // mode: 'gd' (Game Design: owns the game folders) | 'artist' (opens brief packs only) | null (not chosen yet)
-const app = { screen: 'home', mode: F.pref.get('mode'), project: null, filter: 'all', group: null, search: '', recent: [], jobs: [], detail: null, safe: true };
+const app = { screen: 'home', mode: F.pref.get('mode'), project: null, filter: 'all', kind: 'all', group: null, search: '', recent: [], jobs: [], detail: null, safe: true };
 const urls = new Map();   // slot id → object URL of the original
 const thumbUrls = new Map();   // job id → [object URLs]
 const root = $('#app');
@@ -51,10 +51,10 @@ const MODE_ICON = {
 function header(extra = '') {
   const sw = app.screen === 'home' && app.mode ? `<div class="modesw" role="group" aria-label="Chế độ">
       <button class="${app.mode === 'gd' ? 'on' : ''}" data-act="set-mode" data-mode="gd" ${app.mode === 'gd' ? 'aria-current="page"' : ''}>${MODE_ICON.gd}Game Design</button>
-      <button class="${app.mode === 'artist' ? 'on artist' : ''}" data-act="set-mode" data-mode="artist" ${app.mode === 'artist' ? 'aria-current="page"' : ''}>${MODE_ICON.artist}Artist</button>
+      <button class="${app.mode === 'artist' ? 'on artist' : ''}" data-act="set-mode" data-mode="artist" ${app.mode === 'artist' ? 'aria-current="page"' : ''}>${MODE_ICON.artist}Artist / Anim</button>
     </div>` : '';
   return `<header class="top">
-    <div class="brand">${ICON.logo}<span>SkinForge</span>${app.screen !== 'home' && app.project?.kind === 'brief' ? '<span class="pill pink">Chế độ Artist</span>' : ''}</div>
+    <div class="brand">${ICON.logo}<span>SkinForge</span>${app.screen !== 'home' && app.project?.kind === 'brief' ? '<span class="pill pink">Chế độ Artist / Anim</span>' : ''}</div>
     ${sw}${extra}
     <span class="safe">${ICON.shield} ${app.mode === 'artist' ? 'Không cần cài game · chạy trên mọi trình duyệt' : 'Ảnh không rời khỏi máy bạn'}</span>
   </header>`;
@@ -76,14 +76,14 @@ function modePickerView() {
       <button class="role gd" data-act="pick-mode" data-mode="gd">
         <span class="role-top"><span class="role-ic">${ICON.folder}</span><span class="pill">Cần Chrome / Edge</span></span>
         <b>Game Design</b><span class="muted">Người giữ thư mục dự án game.</span>
-        <ul>${item('Thêm thư mục dự án, quét toàn bộ asset')}${item('Đặt quy tắc từng nhóm, xuất brief cho artist')}${item('Nhận gói reskin, kiểm tra, áp dụng vào game')}${item('Sao lưu, hoàn tác, báo cáo dung lượng')}</ul>
+        <ul>${item('Thêm thư mục dự án, quét toàn bộ asset')}${item('Xuất brief art + effect cho Artist / Anim')}${item('Thay âm thanh (sound) của game')}${item('Nhận gói reskin, kiểm tra, áp dụng vào game')}${item('Sao lưu, hoàn tác, báo cáo dung lượng')}</ul>
         <span class="role-cta">Vào chế độ Game Design</span>
       </button>
       <button class="role artist" data-act="pick-mode" data-mode="artist">
         <span class="role-top"><span class="role-ic">${MODE_ICON.artist}</span><span class="pill gray">Mọi trình duyệt</span></span>
-        <b>Artist</b><span class="muted">Người vẽ lại art theo gói brief được giao.</span>
-        <ul>${item('Mở gói brief / reskin được gửi')}${item('Chọn project đang làm để tiếp tục')}${item('Kéo thả ảnh đã vẽ, tự kiểm tra lỗi')}${item('Xuất gói reskin gửi lại Game Design')}</ul>
-        <span class="role-cta">Vào chế độ Artist</span>
+        <b>Artist / Anim</b><span class="muted">Người vẽ lại art và làm lại effect theo gói brief.</span>
+        <ul>${item('Mở gói brief / reskin được gửi')}${item('Chọn project đang làm để tiếp tục')}${item('Art cho Artist, Effect (khói, bọt, tia sáng…) cho Anim')}${item('Kéo thả file đã làm, tự kiểm tra lỗi')}${item('Xuất gói reskin gửi lại Game Design')}</ul>
+        <span class="role-cta">Vào chế độ Artist / Anim</span>
       </button>
     </div>
     <label class="check"><input type="checkbox" id="rememberMode" checked> Nhớ lựa chọn trên máy này — lần sau vào thẳng trang chủ của vai trò</label>
@@ -190,6 +190,7 @@ function cardsOf(p) {
   const seen = new Set();
   for (const s of p.slots) {
     if (app.group && s.group !== app.group) continue;
+    if (app.kind !== 'all' && s.kind !== app.kind) continue;
     if (s.set) {
       if (seen.has(s.set)) continue; seen.add(s.set);
       cards.push({ type: 'set', id: s.set, set: p.sets[s.set], slots: p.sets[s.set].members.map((id) => p.slotById.get(id)) });
@@ -207,7 +208,23 @@ function cardsOf(p) {
 function cardNote(p, c) {
   const errs = c.slots.flatMap((s) => (p.reskins.get(s.id)?.checks || []).filter((k) => k.level === 'error' || k.level === 'warn').map((k) => k.title));
   if (c.status === 'missing') return c.type === 'set' ? `Cần ${c.slots.length} ảnh: ${c.slots[0].key} … ${c.slots.at(-1).key}` : `Cần ${c.slots[0].name}`;
-  return errs[0] ? errs[0] + (errs.length > 1 ? ` (+${errs.length - 1})` : '') : `${c.slots.length}/${c.slots.length} ảnh đạt`;
+  return errs[0] ? errs[0] + (errs.length > 1 ? ` (+${errs.length - 1})` : '') : c.slots[0].kind === 'sound' ? 'Âm thanh đạt' : `${c.slots.length}/${c.slots.length} ảnh đạt`;
+}
+
+const KIND_ICON = { art: '<i class="kdot art"></i>', fx: '<i class="kdot fx"></i>', sound: '<i class="kdot sound"></i>' };
+const kindBadge = (k) => `<span class="kind ${k}">${KINDS[k].label}</span>`;
+
+function soundCard(p, c) {
+  const s = c.slots[0], r = p.reskins.get(s.id);
+  return `<div class="card sound ${STATUS[c.status].cls}">
+    <div class="card-h"><div><b class="mono">${esc(s.key)}</b><span class="muted small">${esc(s.dir || '(gốc)')} · .${s.ext} · ${fmtSec(s.duration || 0)} · ${fmtBytes(s.bytes)}</span></div>
+      <span class="badge ${STATUS[c.status].cls}">${STATUS[c.status].label}</span></div>
+    <div class="snd-row"><small>GỐC</small><audio controls preload="none" src="${origUrl(s)}"></audio></div>
+    <div class="snd-row"><small>MỚI</small>${r ? `<audio controls preload="none" src="${r.preview}"></audio>`
+      : `<label class="snd-drop">${ICON.upload} Chọn file .${s.ext}<input type="file" accept="audio/*" data-act="pick-one" data-id="${esc(s.id)}" hidden></label>`}</div>
+    <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${kindBadge('sound')}
+      <button class="link small" data-act="detail" data-id="${esc(c.id)}">Chi tiết</button></div>
+  </div>`;
 }
 
 function workspaceView() {
@@ -218,8 +235,8 @@ function workspaceView() {
   const extra = `<a class="iconbtn" href="#" data-act="home" aria-label="Về danh sách project">${ICON.back}</a>
     <div class="ptitle"><div><b>${esc(p.name)}</b><span class="pill">${esc(p.engine)}</span></div><code>${esc(p.kind === 'brief' ? p.briefName : (p.root.name + (p.assetRoot ? '/' + p.assetRoot : '')))}</code></div>
     <div class="row right">
-      ${p.kind === 'folder' ? `<button class="btn" data-act="export-brief">Xuất brief cho artist</button>
-        <label class="btn">Nhập gói reskin<input type="file" accept=".zip,image/*" multiple data-act="import-files" hidden></label>
+      ${p.kind === 'folder' ? `<button class="btn" data-act="export-brief" title="Art và effect — âm thanh không nằm trong brief">Xuất brief cho Artist / Anim</button>
+        <label class="btn">Nhập reskin / âm thanh<input type="file" accept=".zip,image/*,audio/*" multiple data-act="import-files" hidden></label>
         <button class="btn primary" data-act="open-apply" ${readyCount ? '' : 'disabled'}>Áp dụng vào game (${readyCount})</button>`
       : `<label class="btn">Chọn ảnh<input type="file" accept="image/*" multiple data-act="import-files" hidden></label>
         <button class="btn primary" data-act="export-reskin" ${p.reskins.size ? '' : 'disabled'}>Xuất gói reskin (${p.reskins.size})</button>`}
@@ -239,13 +256,20 @@ function workspaceView() {
       <button class="gbtn ${!app.group ? 'on' : ''}" data-act="group" data-g=""><span>Tất cả</span><span class="muted small">${p.slots.length}</span></button>
       ${groups.map((g) => `<div class="gitem ${app.group === g.name ? 'on' : ''}">
         <button class="gbtn" data-act="group" data-g="${esc(g.name)}"><span><span>${esc(g.name)}</span><small class="rule ${g.rule}">${RULES[g.rule].label}${g.sets ? ` · ${g.sets} bộ` : ''}</small></span><span class="muted small">${g.count}</span></button>
-        ${p.kind === 'folder' ? `<button class="link small" data-act="toggle-rule" data-g="${esc(g.name)}">Đổi thành “${RULES[g.rule === 'free' ? 'fixed' : 'free'].label}”</button>` : ''}
+        ${p.kind === 'folder' && g.rule !== 'sound' ? `<button class="link small" data-act="toggle-rule" data-g="${esc(g.name)}">Đổi thành “${RULES[g.rule === 'free' ? 'fixed' : 'free'].label}”</button>` : ''}
       </div>`).join('')}
-      <div class="hintbox"><b>Quy tắc</b><br><b>Khung tự do:</b> ${RULES.free.hint} Ảnh trong một bộ phải khớp nhau, không cần khớp ảnh gốc.<br><b>Giữ tỉ lệ khung:</b> ${RULES.fixed.hint}</div>
+      <div class="hintbox"><b>Ai làm gì</b><br>${KIND_ICON.art}<b>Art</b> và ${KIND_ICON.fx}<b>Effect</b>: Artist / Anim (nằm trong brief).${p.kind === 'folder' ? `<br>${KIND_ICON.sound}<b>Âm thanh</b>: Game Design tự thay trong workspace này.` : ''}
+        <br><br><b>Quy tắc</b><br><b>Khung tự do:</b> ${RULES.free.hint} Ảnh trong một bộ phải khớp nhau, không cần khớp ảnh gốc.<br><b>Giữ tỉ lệ khung:</b> ${RULES.fixed.hint}${p.kind === 'folder' ? `<br><b>Âm thanh:</b> ${RULES.sound.hint}` : ''}</div>
     </aside>
     <main class="main">
       <div class="toolbar">
         <label class="search">${'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6B7280" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>'}<span class="sr">Tìm asset</span><input type="search" data-act="search" placeholder="Tìm theo tên file, ví dụ bag_1" value="${esc(app.search)}"></label>
+        <div class="seg kinds" role="group" aria-label="Lọc theo loại">
+          ${[['all', 'Tất cả'], ...Object.entries(KINDS).map(([k, v]) => [k, `${KIND_ICON[k]} ${v.label}`])].map(([k, l]) => {
+            const n = k === 'all' ? p.slots.length : p.slots.filter((s) => s.kind === k).length;
+            return n || k === 'all' ? `<button class="${app.kind === k ? 'on' : ''}" data-act="kind" data-k="${k}">${l} <small>${n}</small></button>` : '';
+          }).join('')}
+        </div>
         <div class="seg" role="group" aria-label="Lọc theo trạng thái">
           ${[['all', 'Tất cả'], ['missing', 'Chưa có'], ['error', 'Lỗi'], ['warn', 'Cảnh báo'], ['ok', 'Đạt']].map(([k, l]) => `<button class="${app.filter === k ? 'on' : ''}" data-act="filter" data-f="${k}">${l}</button>`).join('')}
         </div>
@@ -254,6 +278,7 @@ function workspaceView() {
       <div class="cards">
         ${cards.slice(0, app.limit || 120).map((c) => {
           const s = rep(c), r = p.reskins.get(s.id);
+          if (s.kind === 'sound') return soundCard(p, c);
           return `<button class="card ${STATUS[c.status].cls}" data-act="detail" data-id="${esc(c.id)}">
             <div class="card-h"><div><b class="mono">${esc(c.type === 'set' ? c.set.name : s.key)}</b><span class="muted small">${esc(s.dir || '(gốc)')} · ${s.w}×${s.h}${c.type === 'set' ? ` · bộ ${c.slots.length} ảnh` : ''}</span></div><span class="badge ${STATUS[c.status].cls}">${STATUS[c.status].label}</span></div>
             <div class="pair">
@@ -261,14 +286,14 @@ function workspaceView() {
               <figure><figcaption>RESKIN</figcaption>${r?.preview ? `<div class="thumb checker"><img src="${r.preview}" alt=""></div>` : `<div class="thumb drop">${ICON.upload}<span>Kéo thả ${c.slots.length > 1 ? c.slots.length + ' ảnh' : 'ảnh'}</span></div>`}</figure>
             </div>
             ${c.type === 'set' ? `<div class="dots">${c.dots.map((d) => `<i class="${STATUS[d].cls}"></i>`).join('')}</div>` : ''}
-            <span class="note ${STATUS[c.status].cls}">${esc(cardNote(p, c))}</span>
+            <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${s.kind === 'fx' ? kindBadge('fx') : ''}</div>
           </button>`;
         }).join('') || '<div class="empty">Không có asset nào khớp bộ lọc.</div>'}
       </div>
       ${cards.length > (app.limit || 120) ? `<button class="btn center" data-act="more">Hiện thêm (${cards.length - (app.limit || 120)})</button>` : ''}
     </main>
   </div>
-  <div class="dropveil" aria-hidden="true"><div>${ICON.upload}<b>Thả để nhập ảnh reskin</b><span>Ảnh, thư mục hoặc zip — khớp theo tên file</span></div></div>`;
+  <div class="dropveil" aria-hidden="true"><div>${ICON.upload}<b>Thả để nhập ${p.kind === 'folder' ? 'ảnh / âm thanh' : 'ảnh'}</b><span>File, thư mục hoặc zip — khớp theo tên file</span></div></div>`;
 }
 
 function origUrl(s) {
@@ -276,8 +301,31 @@ function origUrl(s) {
   return urls.get(s.id);
 }
 
+function soundDetailView(p, s) {
+  const r = p.reskins.get(s.id);
+  const chk = (r?.checks || []).sort((a, b) => ({ error: 0, warn: 1, info: 2, ok: 3 })[a.level] - ({ error: 0, warn: 1, info: 2, ok: 3 })[b.level]);
+  const meta = (x, blob, name) => `${fmtSec(x.duration || 0)} · ${x.channels === 1 ? 'mono' : 'stereo'} · ${Math.round((x.rate || 0) / 1000)} kHz · ${fmtBytes(blob?.size ?? x.bytes)}${name ? ` · ${esc(name)}` : ''}`;
+  return `<div class="modal" role="dialog" aria-modal="true" aria-label="Âm thanh ${esc(s.key)}">
+    <div class="sheet">
+      <header class="sheet-h"><div><b class="mono">${esc(s.key)}</b> <span class="muted">${esc(s.dir || '(gốc)')} · .${s.ext}</span> ${kindBadge('sound')}</div>
+        <button class="iconbtn" data-act="close-detail" aria-label="Đóng">${ICON.close}</button></header>
+      <div class="sheet-b">
+        <div class="snd-big"><small>GỐC</small><audio controls src="${origUrl(s)}"></audio><span class="muted small">${meta(s)}</span></div>
+        <div class="snd-big"><small>MỚI</small>${r ? `<audio controls src="${r.preview}"></audio><span class="muted small">${meta(r, r.blob, r.name)}</span>`
+          : `<label class="btn">Chọn file .${s.ext}<input type="file" accept="audio/*" data-act="pick-one" data-id="${esc(s.id)}" hidden></label>`}</div>
+        <div class="panel"><b>Kiểm tra tự động</b>
+          ${chk.length ? chk.map((k) => `<div class="chk ${k.level}"><i aria-hidden="true">${{ ok: '✓', info: 'i', warn: '!', error: '✗' }[k.level]}</i><div><b>${esc(k.title)}</b><span>${esc(k.detail)}</span></div></div>`).join('') : '<span class="muted small">Chưa có file mới cho âm thanh này.</span>'}
+        </div>
+        <div class="panel"><b>Yêu cầu</b><dl><dt>Tên file</dt><dd class="mono">${esc(s.key)}.${s.ext}</dd><dt>Định dạng</dt><dd>.${s.ext} (giống file gốc)</dd><dt>Độ dài gốc</dt><dd>${fmtSec(s.duration || 0)}</dd><dt>Xuất vào game</dt><dd>Chép nguyên file, không chuyển đổi</dd></dl></div>
+        ${r ? `<button class="btn danger" data-act="remove-reskin" data-id="${esc(s.id)}" data-type="slot">Xoá file mới</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
 function detailView() {
   const p = app.project, d = app.detail;
+  if (d.type === 'slot' && p.slotById.get(d.id)?.kind === 'sound') return soundDetailView(p, p.slotById.get(d.id));
   const slots = d.type === 'set' ? p.sets[d.id].members.map((id) => p.slotById.get(id)) : [p.slotById.get(d.id)];
   const s0 = slots[0], rule = p.groups[s0.group].rule;
   const fitKey = s0.set || s0.id, fit = p.fits[fitKey];
@@ -421,7 +469,7 @@ function newProject(o) {
 
 async function finishLoad(p) {
   urls.forEach((u) => u && URL.revokeObjectURL(u)); urls.clear();
-  app.project = p; app.group = null; app.filter = 'all'; app.search = ''; app.detail = null; app.apply = null; app.limit = 120;
+  app.project = p; app.group = null; app.filter = 'all'; app.kind = 'all'; app.search = ''; app.detail = null; app.apply = null; app.limit = 120;
   checkAll(p);
   await refreshPreviews(p, [...p.reskins.keys()]);
   app.screen = 'workspace'; draw();
@@ -433,6 +481,7 @@ async function refreshPreviews(p, ids) {
     const s = p.slotById.get(id), r = p.reskins.get(id);
     if (!s || !r) continue;
     if (r.preview) URL.revokeObjectURL(r.preview);
+    if (s.kind === 'sound' || r.kind === 'sound') { r.preview = URL.createObjectURL(r.blob); continue; }   // played as-is
     const fit = p.fits[s.set || s.id] || null;
     r.preview = URL.createObjectURL(await render(r.blob, r, s.w, s.h, fit, 'png', 320));
     if (ids.length > 8) busy('Đang tạo xem trước…', ++i, ids.length);
@@ -458,8 +507,8 @@ async function importEntries(entries) {
       const z = await readZip(e.blob);
       const meta = z['reskin.json'] ? JSON.parse(await z['reskin.json'].text()) : null;
       if (meta?.fits) Object.assign(p.fits, meta.fits);
-      for (const [path, blob] of Object.entries(z)) if (F.IMAGE_EXT.has(F.ext(path))) expanded.push({ path: path.replace(/^reskin\//, ''), blob });
-    } else if (F.IMAGE_EXT.has(F.ext(e.path))) expanded.push(e);
+      for (const [path, blob] of Object.entries(z)) if (F.ASSET_EXT.has(F.ext(path))) expanded.push({ path: path.replace(/^reskin\//, ''), blob });
+    } else if (F.ASSET_EXT.has(F.ext(e.path))) expanded.push(e);
   }
   const match = matcher(p.slots);
   const changed = [], unknown = [], ambiguous = [];
@@ -512,18 +561,23 @@ async function collectDrop(dt) {
 async function exportBrief() {
   const p = app.project;
   const files = {};
+  // the brief is for Artist / Anim: art + effects only — sound stays with Game Design
+  const slots = p.slots.filter((s) => s.kind !== 'sound');
+  const nFx = slots.filter((s) => s.kind === 'fx').length;
   let i = 0;
-  busy('Đang tạo gói brief…', 0, p.slots.length);
-  for (const s of p.slots) {
+  busy('Đang tạo gói brief…', 0, slots.length);
+  for (const s of slots) {
     files[`originals/${s.dir ? s.dir + '/' : ''}${s.key}.png`] = await toPNG(p.files.get(s.id), s.name);
-    busy('Đang tạo gói brief…', ++i, p.slots.length);
+    busy('Đang tạo gói brief…', ++i, slots.length);
   }
-  const brief = { tool: 'SkinForge', kind: 'brief', version: 1, project: p.name, engine: p.engine, created: new Date().toISOString(),
-    groups: Object.fromEntries(Object.values(p.groups).map((g) => [g.name, { rule: g.rule }])),
-    slots: p.slots.map(({ id, key, name, dir, ext, group, w, h, alpha, bytes, fill, set, idx }) => ({ id, key, name, dir, ext, group, w, h, alpha, bytes, fill, set, idx })) };
+  const groups = Object.values(p.groups).filter((g) => g.rule !== 'sound');
+  const brief = { tool: 'SkinForge', kind: 'brief', version: 2, project: p.name, engine: p.engine, created: new Date().toISOString(),
+    groups: Object.fromEntries(groups.map((g) => [g.name, { rule: g.rule }])),
+    slots: slots.map(({ id, key, name, dir, ext, group, kind, w, h, alpha, bytes, fill, set, idx }) => ({ id, key, name, dir, ext, group, kind, w, h, alpha, bytes, fill, set, idx })) };
   files['brief.json'] = JSON.stringify(brief, null, 2);
   files['HUONG-DAN.txt'] = [
-    `Gói brief reskin: ${p.name} (${p.slots.length} ảnh)`, '',
+    `Gói brief reskin: ${p.name} (${slots.length} ảnh: ${slots.length - nFx} art, ${nFx} effect)`, '',
+    'Art: Artist vẽ lại. Effect (hiệu ứng: khói, bọt, tia sáng, lấp lánh…): Anim làm lại. Mở trên trang để lọc theo Art / Effect.', '',
     'Cách làm:',
     '1. Mở https://nocgamesorigin-ale.github.io/SkinForge/ → "Mở gói" → chọn file zip này để xem từng ô, yêu cầu và tự kiểm tra.',
     '2. Vẽ lại ảnh trong thư mục originals/. GIỮ NGUYÊN TÊN FILE và cấu trúc thư mục.',
@@ -537,7 +591,7 @@ async function exportBrief() {
   busy();
   download(zip, `${slug(p.name)}_brief.zip`);
   toast(`Đã xuất gói brief (${fmtBytes(zip.size)})`, 'ok');
-  const text = `${p.name} — xuất brief ${p.slots.length} ảnh (${fmtBytes(zip.size)})`;
+  const text = `${p.name} — xuất brief ${slots.length} ảnh (${slots.length - nFx} art, ${nFx} effect · ${fmtBytes(zip.size)})`;
   await touchRecent({ briefAt: Date.now(), activity: text }); F.logActivity(text, 'warn');
 }
 
@@ -568,7 +622,7 @@ async function loadJob(job, z) {
   const files = new Map();
   for (const s of brief.slots) files.set(s.id, z[`originals/${s.dir ? s.dir + '/' : ''}${s.key}.png`]);
   const p = newProject({ kind: 'brief', name: brief.project, engine: brief.engine, briefName: job.briefName, jobId: job.id,
-    slots: brief.slots.map((s) => ({ ...s, set: undefined, idx: undefined })), files });
+    slots: brief.slots.filter((s) => s.kind !== 'sound').map((s) => ({ ...s, kind: s.kind || kindOf(s.id), set: undefined, idx: undefined })), files });
   for (const [g, v] of Object.entries(brief.groups || {})) if (p.groups[g]) p.groups[g].rule = v.rule;
   p.fits = job.fits || {};
   let i = 0;
@@ -595,7 +649,7 @@ async function openZip(file) {
     const z = await readZip(file);
     busy();
     if (z['brief.json']) {
-      if (app.mode !== 'artist') { setMode('artist'); toast('Đây là gói brief cho Artist — đã chuyển sang chế độ Artist', 'ok'); }
+      if (app.mode !== 'artist') { setMode('artist'); toast('Đây là gói brief cho Artist / Anim — đã chuyển sang chế độ Artist / Anim', 'ok'); }
       await openBriefJob(file, z);
       return;
     }
@@ -642,7 +696,8 @@ async function openApply() {
     const s = p.slotById.get(id), r = p.reskins.get(id);
     busy('Đang chuẩn bị ảnh xuất…', ++i, ids.length);
     if (r.status === 'error') { skip++; continue; }
-    const out = await render(r.blob, r, s.w, s.h, p.fits[s.set || s.id] || null, s.ext);
+    // sound is copied as-is (its format was checked); images are rendered into the original frame and format
+    const out = s.kind === 'sound' ? r.blob : await render(r.blob, r, s.w, s.h, p.fits[s.set || s.id] || null, s.ext);
     ok.push({ s, out });
     const g = (rows[s.group] ||= { group: s.group, n: 0, before: 0, after: 0 });
     g.n++; g.before += s.bytes; g.after += out.size; before += s.bytes; after += out.size;
@@ -731,6 +786,7 @@ document.addEventListener('click', async (e) => {
   }
   if (act === 'group') { app.group = el.dataset.g || null; draw(); }
   if (act === 'filter') { app.filter = el.dataset.f; draw(); }
+  if (act === 'kind') { app.kind = el.dataset.k; draw(); }
   if (act === 'more') { app.limit = (app.limit || 120) + 120; draw(); }
   if (act === 'toggle-rule') { const g = p.groups[el.dataset.g]; g.rule = g.rule === 'free' ? 'fixed' : 'free'; checkAll(p); await saveMeta(); draw(); }
   if (act === 'detail') { const c = el.dataset.id; app.detail = { type: p.sets[c] ? 'set' : 'slot', id: c }; draw(); }
