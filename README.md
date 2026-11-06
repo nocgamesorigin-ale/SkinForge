@@ -58,7 +58,8 @@ gợi ý nhanh), rồi ghi yêu cầu cho từng màn:
 ## Luồng làm việc
 
 1. **Mở thư mục game** (Chrome/Edge). SkinForge nhận diện engine (Falcon IDE, GameKit, Vite, Unity, Godot…), tìm thư
-   mục asset (`src/assets`, `assets`, `public`, `Assets`…), quét mọi ảnh PNG/JPG/WebP và lập danh sách: tên, kích thước,
+   mục asset đầu tiên thật sự có ảnh / âm thanh (`src/assets`, `assets`, `public/assets`, `public/data`, `public`, `Assets`…;
+   thư mục có mà trống thì bỏ qua), quét mọi ảnh PNG/JPG/WebP và lập danh sách: tên, kích thước,
    nền trong suốt, nhóm, bộ ảnh (`<tên>_0 … <tên>_n` cùng kích thước).
 2. **Xuất brief cho artist** → `<game>_brief.zip`: ảnh gốc PNG + `brief.json` + hướng dẫn. Artist mở zip này trên cùng
    trang (chế độ Artist, chạy cả Firefox/Safari), kéo thả ảnh đã vẽ để tự kiểm tra, rồi **Xuất gói reskin**.

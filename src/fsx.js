@@ -87,10 +87,25 @@ export async function detectProject(root) {
   else if (await has('vite.config.ts') || await has('vite.config.js')) engine = 'Vite';
   else if (pkg) engine = 'Web (npm)';
 
-  const candidates = engine === 'Unity' ? ['Assets'] : ['src/assets', 'assets', 'public/assets', 'public', 'res', 'resources', 'Assets'];
+  // the first candidate that really holds images or sounds: GameKit keeps an empty src/assets (only manifest.json)
+  // while a game exported from another engine may keep everything under public/data
+  const candidates = engine === 'Unity' ? ['Assets'] : ['src/assets', 'assets', 'public/assets', 'public/data', 'public', 'res', 'resources', 'Assets'];
   let assetRoot = '';
-  for (const c of candidates) if (await has(c, 'dir')) { assetRoot = c; break; }
+  for (const c of candidates) {
+    const d = await tryGetDir(root, c);
+    if (d && await hasMedia(d)) { assetRoot = c; break; }
+  }
   return { engine, assetRoot, name: pkg?.name || root.name };
+}
+
+/** True as soon as one image or sound is found under `dir` (animation data alone does not count: .json is too common). */
+async function hasMedia(dir) {
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind === 'directory') {
+      if (!SKIP_DIRS.has(name) && !name.startsWith('.') && await hasMedia(h)) return true;
+    } else if (IMAGE_EXT.has(ext(name)) || AUDIO_EXT.has(ext(name))) return true;
+  }
+  return false;
 }
 
 /* ---------- IndexedDB: Game Design projects (folder handles) and Artist jobs (brief + art, as blobs) ---------- */
