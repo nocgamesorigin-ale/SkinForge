@@ -68,7 +68,11 @@ export function defaultGroups(slots, sets) {
     const g = (groups[s.group] ||= { name: s.group, count: 0, sets: 0, rule: 'fixed' });
     g.count++;
   }
-  for (const set of Object.values(sets)) { groups[set.group].sets++; groups[set.group].rule = 'free'; }
+  const inSets = {};
+  for (const set of Object.values(sets)) { groups[set.group].sets++; inSets[set.group] = (inSets[set.group] || 0) + set.members.length; }
+  // "free frame" only where image sets make up most of the folder (items), not for a UI folder
+  // that merely contains a numbered series such as room_1 … room_3
+  for (const g of Object.values(groups)) if ((inSets[g.name] || 0) >= g.count * 0.5) g.rule = 'free';
   return groups;
 }
 

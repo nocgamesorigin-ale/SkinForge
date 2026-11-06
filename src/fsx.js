@@ -89,23 +89,45 @@ export async function detectProject(root) {
   return { engine, assetRoot, name: pkg?.name || root.name };
 }
 
-/* ---------- recent projects (directory handles survive reloads in IndexedDB) ---------- */
-const DB = 'skinforge', STORE = 'recent';
+/* ---------- IndexedDB: Game Design projects (folder handles) and Artist jobs (brief + art, as blobs) ---------- */
+const DB = 'skinforge';
 function db() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore(STORE, { keyPath: 'id' });
+    const r = indexedDB.open(DB, 2);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains('recent')) d.createObjectStore('recent', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('jobs')) d.createObjectStore('jobs', { keyPath: 'id' });
+    };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-async function tx(mode, fn) {
+async function tx(store, mode, fn) {
   const d = await db();
   return new Promise((res, rej) => {
-    const t = d.transaction(STORE, mode); const s = t.objectStore(STORE);
+    const t = d.transaction(store, mode); const s = t.objectStore(store);
     const out = fn(s);
-    t.oncomplete = () => res(out?.result ?? out); t.onerror = () => rej(t.error);
+    // a request's result is undefined when nothing matched (get of a missing key): return that, not the request
+    t.oncomplete = () => res(out instanceof IDBRequest ? out.result : out); t.onerror = () => rej(t.error);
   });
 }
-export const recentList = async () => { try { return (await tx('readonly', (s) => s.getAll())) || []; } catch { return []; } };
-export const recentPut = (rec) => tx('readwrite', (s) => s.put(rec)).catch(() => {});
-export const recentDelete = (id) => tx('readwrite', (s) => s.delete(id)).catch(() => {});
+const all = (store) => tx(store, 'readonly', (s) => s.getAll()).then((x) => x || []).catch(() => []);
+export const recentList = () => all('recent');
+export const recentGet = (id) => tx('recent', 'readonly', (s) => s.get(id)).catch(() => null);
+export const recentPut = (rec) => tx('recent', 'readwrite', (s) => s.put(rec)).catch(() => {});
+export const recentDelete = (id) => tx('recent', 'readwrite', (s) => s.delete(id)).catch(() => {});
+export const jobList = () => all('jobs');
+export const jobGet = (id) => tx('jobs', 'readonly', (s) => s.get(id)).catch(() => null);
+export const jobPut = (job) => tx('jobs', 'readwrite', (s) => s.put(job));
+export const jobDelete = (id) => tx('jobs', 'readwrite', (s) => s.delete(id)).catch(() => {});
+
+/* ---------- small per-machine settings and the activity log (localStorage) ---------- */
+export const pref = {
+  get(k, d = null) { try { const v = localStorage.getItem('skinforge.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('skinforge.' + k, JSON.stringify(v)); } catch {} },
+};
+export function logActivity(text, kind = 'info') {
+  const list = pref.get('log', []);
+  list.unshift({ t: Date.now(), text, kind });
+  pref.set('log', list.slice(0, 30));
+}

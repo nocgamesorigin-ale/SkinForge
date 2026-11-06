@@ -5,6 +5,16 @@ Chạy hoàn toàn trong trình duyệt — **ảnh không rời khỏi máy b�
 
 **Dùng online:** https://nocgamesorigin-ale.github.io/SkinForge/
 
+## Hai chế độ
+
+Lần đầu mở, SkinForge hỏi vai trò (nhớ trên máy, đổi được ở công tắc trên thanh đầu):
+
+- **Game Design** — người giữ thư mục dự án (Chrome/Edge): thêm thư mục dự án, xuất brief, nhận gói reskin
+  (kéo thả `*_reskin.zip` vào trang chủ → tự mở đúng dự án), kiểm tra, áp dụng vào game. Mỗi thẻ dự án hiện trạng thái
+  (Chưa gửi brief → Đã gửi brief · chờ artist → Có gói reskin mới → Đã áp dụng) và có nhật ký hoạt động.
+- **Artist** — chỉ có **Mở gói (brief / reskin)** và **Project đang làm**. Gói brief và ảnh artist đã kéo vào được lưu
+  trong trình duyệt (IndexedDB) để mở lại làm tiếp; trạng thái Mới nhận → Đang làm → Đã gửi. Chạy trên mọi trình duyệt.
+
 ## Luồng làm việc
 
 1. **Mở thư mục game** (Chrome/Edge). SkinForge nhận diện engine (Falcon IDE, GameKit, Vite, Unity, Godot…), tìm thư

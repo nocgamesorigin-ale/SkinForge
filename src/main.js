@@ -19,13 +19,16 @@ const STATUS = {
   ok: { label: 'Đạt', cls: 'ok' }, warn: { label: 'Cảnh báo', cls: 'warn' }, error: { label: 'Lỗi', cls: 'error' }, missing: { label: 'Chưa có', cls: 'none' },
 };
 
-const app = { screen: 'home', project: null, filter: 'all', group: null, search: '', recent: [], detail: null, safe: true };
+// mode: 'gd' (Game Design: owns the game folders) | 'artist' (opens brief packs only) | null (not chosen yet)
+const app = { screen: 'home', mode: F.pref.get('mode'), project: null, filter: 'all', group: null, search: '', recent: [], jobs: [], detail: null, safe: true };
 const urls = new Map();   // slot id → object URL of the original
+const thumbUrls = new Map();   // job id → [object URLs]
 const root = $('#app');
+document.documentElement.dataset.mode = app.mode || '';
 
 /* ---------------- rendering ---------------- */
 function draw() {
-  root.innerHTML = app.screen === 'home' ? homeView() : workspaceView();
+  root.innerHTML = app.screen !== 'home' ? workspaceView() : !app.mode ? modePickerView() : app.mode === 'gd' ? homeGDView() : homeArtistView();
   if (app.detail) root.insertAdjacentHTML('beforeend', detailView());
   if (app.apply) root.insertAdjacentHTML('beforeend', applyView());
 }
@@ -41,43 +44,142 @@ function busy(msg, done, total) {
   b.innerHTML = `<div class="busy-card" role="status"><b>${esc(msg)}</b>${pct !== null ? `<div class="bar"><i style="width:${pct}%"></i></div><span>${done} / ${total}</span>` : '<div class="spinner"></div>'}</div>`;
 }
 
+const MODE_ICON = {
+  gd: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  artist: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 3l3 3-9.5 9.5-4 1 1-4z"/><path d="M7.5 16.5c-2 0-3.5 1.5-3.5 4 2.5 0 4-1.5 4-3.5"/></svg>',
+};
 function header(extra = '') {
+  const sw = app.screen === 'home' && app.mode ? `<div class="modesw" role="group" aria-label="Chế độ">
+      <button class="${app.mode === 'gd' ? 'on' : ''}" data-act="set-mode" data-mode="gd" ${app.mode === 'gd' ? 'aria-current="page"' : ''}>${MODE_ICON.gd}Game Design</button>
+      <button class="${app.mode === 'artist' ? 'on artist' : ''}" data-act="set-mode" data-mode="artist" ${app.mode === 'artist' ? 'aria-current="page"' : ''}>${MODE_ICON.artist}Artist</button>
+    </div>` : '';
   return `<header class="top">
-    <div class="brand">${ICON.logo}<span>SkinForge</span>${app.project?.kind === 'brief' ? '<span class="pill pink">Chế độ Artist</span>' : ''}</div>
-    ${extra}
-    <span class="safe">${ICON.shield} Ảnh không rời khỏi máy bạn</span>
+    <div class="brand">${ICON.logo}<span>SkinForge</span>${app.screen !== 'home' && app.project?.kind === 'brief' ? '<span class="pill pink">Chế độ Artist</span>' : ''}</div>
+    ${sw}${extra}
+    <span class="safe">${ICON.shield} ${app.mode === 'artist' ? 'Không cần cài game · chạy trên mọi trình duyệt' : 'Ảnh không rời khỏi máy bạn'}</span>
   </header>`;
 }
 
-function homeView() {
-  const cards = app.recent.map((r) => `
-    <div class="pcard">
-      <button class="pcard-main" data-act="open-recent" data-id="${esc(r.id)}">
-        <span class="pill">${esc(r.engine)}</span>
-        <b>${esc(r.name)}</b>
-        <code>${esc(r.path || r.name)}</code>
-        <span class="muted">${esc(r.stats || '')}</span>
-        <span class="muted small">Mở lần cuối ${new Date(r.opened).toLocaleString('vi-VN')}</span>
+const ago = (t) => {
+  if (!t) return '';
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? 'vừa xong' : m < 60 ? `${m} phút trước` : m < 1440 ? `${Math.round(m / 60)} giờ trước` : new Date(t).toLocaleDateString('vi-VN');
+};
+
+function modePickerView() {
+  const item = (t) => `<li><span aria-hidden="true">✓</span>${t}</li>`;
+  return `<header class="top bare"><div class="brand">${ICON.logo}<span>SkinForge</span></div><span class="safe">${ICON.shield} Ảnh không rời khỏi máy bạn</span></header>
+  <main class="picker">
+    <div class="picker-h"><h1>Bạn làm việc với vai trò nào?</h1>
+      <p>Mỗi vai trò có một trang chủ riêng, chỉ hiện đúng những việc bạn cần. Đổi lại bất cứ lúc nào ở góc trên.</p></div>
+    <div class="picker-cards">
+      <button class="role gd" data-act="pick-mode" data-mode="gd">
+        <span class="role-top"><span class="role-ic">${ICON.folder}</span><span class="pill">Cần Chrome / Edge</span></span>
+        <b>Game Design</b><span class="muted">Người giữ thư mục dự án game.</span>
+        <ul>${item('Thêm thư mục dự án, quét toàn bộ asset')}${item('Đặt quy tắc từng nhóm, xuất brief cho artist')}${item('Nhận gói reskin, kiểm tra, áp dụng vào game')}${item('Sao lưu, hoàn tác, báo cáo dung lượng')}</ul>
+        <span class="role-cta">Vào chế độ Game Design</span>
       </button>
-      <button class="link danger small" data-act="forget" data-id="${esc(r.id)}">Xoá khỏi danh sách</button>
-    </div>`).join('');
+      <button class="role artist" data-act="pick-mode" data-mode="artist">
+        <span class="role-top"><span class="role-ic">${MODE_ICON.artist}</span><span class="pill gray">Mọi trình duyệt</span></span>
+        <b>Artist</b><span class="muted">Người vẽ lại art theo gói brief được giao.</span>
+        <ul>${item('Mở gói brief / reskin được gửi')}${item('Chọn project đang làm để tiếp tục')}${item('Kéo thả ảnh đã vẽ, tự kiểm tra lỗi')}${item('Xuất gói reskin gửi lại Game Design')}</ul>
+        <span class="role-cta">Vào chế độ Artist</span>
+      </button>
+    </div>
+    <label class="check"><input type="checkbox" id="rememberMode" checked> Nhớ lựa chọn trên máy này — lần sau vào thẳng trang chủ của vai trò</label>
+  </main>`;
+}
+
+function projectState(r) {
+  if (r.reskinAt && (!r.appliedAt || r.reskinAt > r.appliedAt)) return ['Có gói reskin mới', 'ok'];
+  if (r.appliedAt) return ['Đã áp dụng vào game', 'info'];
+  if (r.briefAt) return ['Đã gửi brief · chờ artist', 'warn'];
+  return ['Chưa gửi brief', 'none'];
+}
+
+function homeGDView() {
+  const log = F.pref.get('log', []);
+  const cards = app.recent.map((r) => {
+    const [state, cls] = projectState(r);
+    const pct = r.assets ? Math.round(((r.done || 0) / r.assets) * 100) : 0;
+    return `<article class="pcard">
+      <div class="pcard-top"><span class="pill">${esc(r.engine)}</span><span class="badge ${cls}">${state}</span></div>
+      <div class="pcard-title"><b>${esc(r.name)}</b><span class="muted small">${ago(r.opened)}</span></div>
+      <code>${esc(r.path || r.name)}</code>
+      <div class="pstats"><div><small>Asset</small><b>${r.assets ?? '—'}</b></div><div><small>Đã reskin</small><b>${r.done ?? 0}</b></div><div><small>Ảnh gốc</small><b>${r.bytes ? fmtBytes(r.bytes) : '—'}</b></div></div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <span class="muted small">${esc(r.activity || 'Chưa có hoạt động')}</span>
+      <div class="row">
+        <button class="btn primary grow" data-act="open-recent" data-id="${esc(r.id)}">Mở workspace</button>
+        <button class="btn grow" data-act="recent-brief" data-id="${esc(r.id)}">Xuất brief</button>
+        <button class="iconbtn" data-act="forget" data-id="${esc(r.id)}" aria-label="Xoá ${esc(r.name)} khỏi danh sách" title="Xoá khỏi danh sách">${ICON.close}</button>
+      </div>
+    </article>`;
+  }).join('');
   return `${header()}
   <main class="home">
     <section class="hero">
-      <div><h1>Project reskin</h1>
-        <p>Mỗi game là một project riêng. SkinForge đọc và ghi thẳng vào thư mục asset bạn chọn — Falcon IDE, GameKit hay công cụ build khác tự build lại khi file thay đổi.</p></div>
-      <div class="row">
-        <label class="btn">${ICON.zip} Mở gói (brief / reskin)<input type="file" accept=".zip" data-act="open-zip" hidden></label>
-        <button class="btn primary" data-act="open-folder" ${F.fsSupported ? '' : 'disabled'}>${ICON.folder} Mở thư mục game</button>
-      </div>
+      <div><h1>Dự án game của tôi</h1>
+        <p>Thêm thư mục dự án để quét asset. Mỗi dự án theo dõi brief đã gửi và các gói reskin artist gửi về.</p></div>
+      <button class="btn primary big" data-act="open-folder" ${F.fsSupported ? '' : 'disabled'}>${ICON.folder} Thêm thư mục dự án</button>
     </section>
-    ${F.fsSupported ? '' : '<div class="notice warn">Trình duyệt này không cho ghi thẳng vào thư mục. Dùng Chrome hoặc Edge để mở game; vẫn mở được gói brief (chế độ Artist).</div>'}
-    <section class="grid-projects">${cards || '<div class="empty">Chưa có project nào. Bấm “Mở thư mục game” và chọn thư mục gốc của game.</div>'}</section>
+    ${F.fsSupported ? '' : '<div class="notice warn">Trình duyệt này không cho ghi thẳng vào thư mục. Chế độ Game Design cần Chrome hoặc Edge.</div>'}
+    <section class="inbox">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/></svg>
+      <div class="grow"><b>Nhận gói reskin từ artist</b><span>Kéo thả file <b>*_reskin.zip</b> vào đây — SkinForge tự nhận ra thuộc dự án nào và mở workspace để kiểm tra.</span></div>
+      <label class="btn">Chọn file zip<input type="file" accept=".zip" data-act="open-zip" hidden></label>
+    </section>
+    <section class="grid-projects">${cards || '<div class="empty">Chưa có dự án nào. Bấm “Thêm thư mục dự án” và chọn thư mục gốc của game.</div>'}</section>
+    ${log.length ? `<section class="activity"><div class="activity-h"><b>Hoạt động gần đây</b><span class="muted small">Lưu trong trình duyệt này</span></div>
+      ${log.slice(0, 8).map((l) => `<div class="act"><i class="${l.kind}"></i><span class="grow">${esc(l.text)}</span><span class="muted small">${ago(l.t)}</span></div>`).join('')}</section>` : ''}
+  </main>`;
+}
+
+function jobState(j) {
+  if (!j.done) return ['Mới nhận', 'info'];
+  if (j.exportedAt && j.exportedAt >= (j.updatedAt || 0)) return ['Đã gửi', 'ok'];
+  return ['Đang làm', 'pink'];
+}
+
+function homeArtistView() {
+  const jobs = app.jobs.map((j) => {
+    const [state, cls] = jobState(j);
+    const pct = j.total ? Math.round(((j.done || 0) / j.total) * 100) : 0;
+    const th = thumbUrls.get(j.id) || [];
+    return `<article class="job">
+      <div class="job-th">${th.map((u) => `<span class="checker"><img src="${u}" alt=""></span>`).join('')}</div>
+      <div class="job-main">
+        <div class="row"><b>${esc(j.name)}</b><span class="badge ${cls}">${state}</span></div>
+        <span class="muted small">${esc(j.briefName)} · nhận ${ago(j.received)} · ${j.total} ô asset${j.errors ? ` · ${j.errors} ảnh cần sửa` : ''}</span>
+        <div class="row"><div class="bar pink grow"><i style="width:${pct}%"></i></div><span class="small"><b>${j.done || 0} / ${j.total}</b></span></div>
+      </div>
+      <div class="row">
+        <button class="btn artist-primary" data-act="open-job" data-id="${esc(j.id)}">Tiếp tục</button>
+        <button class="btn" data-act="export-job" data-id="${esc(j.id)}" ${j.done ? '' : 'disabled'}>${j.exportedAt && j.exportedAt >= (j.updatedAt || 0) ? 'Xuất lại' : `Xuất gói reskin${j.done ? ` (${j.done})` : ''}`}</button>
+        <button class="iconbtn" data-act="forget-job" data-id="${esc(j.id)}" aria-label="Xoá ${esc(j.name)} khỏi danh sách" title="Xoá khỏi danh sách">${ICON.close}</button>
+      </div>
+    </article>`;
+  }).join('');
+  return `${header()}
+  <main class="home narrow">
+    <section><h1>Việc reskin của tôi</h1><p class="muted">Mở gói brief Game Design gửi cho bạn, hoặc chọn một project đang làm để tiếp tục.</p></section>
+    <label class="opener">
+      <span class="opener-ic"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg></span>
+      <b>Mở gói (brief / reskin)</b>
+      <span>Kéo thả file <b>*_brief.zip</b> hoặc <b>*_reskin.zip</b> vào đây</span>
+      <span class="btn artist-primary">Chọn file zip</span>
+      <small>Gói chỉ được đọc trong trình duyệt của bạn — không tải lên đâu cả</small>
+      <input type="file" accept=".zip" data-act="open-zip" hidden>
+    </label>
+    <section class="jobs">
+      <div class="jobs-h"><h2>Project đang làm</h2><span class="muted small">Lưu trên trình duyệt này · ảnh bạn đã kéo vào được giữ lại</span></div>
+      ${jobs || '<div class="empty">Chưa có project nào. Mở gói brief Game Design gửi cho bạn để bắt đầu.</div>'}
+    </section>
     <section class="steps">
-      <div><b>1 · Mở thư mục game</b><span>Quét ảnh, lập danh sách: tên, kích thước, nền trong suốt, bộ ảnh.</span></div>
-      <div><b>2 · Gửi brief cho artist</b><span>Xuất zip gồm ảnh gốc PNG và yêu cầu từng ô; artist mở bằng chính trang này.</span></div>
-      <div><b>3 · Nhận reskin, kiểm tra</b><span>Kéo thả gói reskin: báo sai tên, sai tỉ lệ, thiếu nền trong suốt, bộ ảnh lệch nhau.</span></div>
-      <div><b>4 · Áp dụng vào game</b><span>Xuất đúng định dạng và kích thước, sao lưu bản cũ, báo cáo dung lượng.</span></div>
+      <div><b>Giữ đúng tên file</b><span>Tool tự khớp ảnh theo tên.</span></div>
+      <div><b>PNG nền trong suốt</b><span>Cho đồ vật, icon, nút.</span></div>
+      <div><b>Đồ vật: dáng tự do</b><span>Nhưng các ảnh trong một bộ phải khớp nhau.</span></div>
+      <div><b>Nút, banner, nền</b><span>Giữ tỉ lệ khung như ảnh gốc.</span></div>
     </section>
   </main>`;
 }
@@ -258,7 +360,18 @@ function applyView() {
 }
 
 /* ---------------- project loading ---------------- */
-async function refreshRecent() { app.recent = (await F.recentList()).sort((a, b) => b.opened - a.opened); }
+async function refreshRecent() {
+  app.recent = (await F.recentList()).sort((a, b) => b.opened - a.opened);
+  app.jobs = (await F.jobList()).sort((a, b) => (b.updatedAt || b.received) - (a.updatedAt || a.received));
+  for (const j of app.jobs) if (!thumbUrls.has(j.id)) thumbUrls.set(j.id, (j.thumbs || []).map((b) => URL.createObjectURL(b)));
+}
+
+/** Update the Game Design project card (state, counts, last activity) of the open folder project. */
+async function touchRecent(patch) {
+  const p = app.project; if (!p?.recentId) return;
+  const rec = await F.recentGet(p.recentId); if (!rec) return;
+  await F.recentPut({ ...rec, assets: p.slots.length, done: p.reskins.size, bytes: p.slots.reduce((a, s) => a + s.bytes, 0), ...patch });
+}
 
 async function openFolder(handle) {
   if (!(await F.ensurePermission(handle))) { toast('Chưa được cấp quyền đọc/ghi thư mục', 'error'); return; }
@@ -290,9 +403,12 @@ async function openFolder(handle) {
         busy('Đang nạp reskin đã lưu…', ++i, masters.length);
       }
     }
+    p.recentId = `${info.name}::${handle.name}`;
     await finishLoad(p);
-    const rec = { id: `${info.name}::${handle.name}`, name: info.name, engine: info.engine, handle, path: handle.name + (info.assetRoot ? '/' + info.assetRoot : ''), opened: Date.now(), stats: `${slots.length} ảnh · ${Object.keys(p.sets).length} bộ` };
-    await F.recentPut(rec);
+    const prev = (await F.recentGet(p.recentId)) || {};
+    await F.recentPut({ ...prev, id: p.recentId, name: info.name, engine: info.engine, handle, path: handle.name + (info.assetRoot ? '/' + info.assetRoot : ''),
+      opened: Date.now(), assets: slots.length, sets: Object.keys(p.sets).length, done: p.reskins.size, bytes: slots.reduce((a, s) => a + s.bytes, 0) });
+    if (!prev.id) F.logActivity(`${info.name} — thêm dự án (${slots.length} ảnh, ${Object.keys(p.sets).length} bộ)`, 'info');
   } catch (e) {
     console.error(e); toast('Không mở được thư mục: ' + e.message, 'error');
   } finally { busy(); }
@@ -326,6 +442,7 @@ async function refreshPreviews(p, ids) {
 
 async function saveMeta() {
   const p = app.project;
+  if (p.kind === 'brief') return saveJob();
   if (p.kind !== 'folder') return;
   const groups = Object.fromEntries(Object.values(p.groups).map((g) => [g.name, { rule: g.rule }]));
   await F.writeJSON(p.root, '.reskin/project.json', { tool: 'SkinForge', version: 1, assetRoot: p.assetRoot, groups, fits: p.fits, lastBackup: p.lastBackup });
@@ -360,6 +477,11 @@ async function importEntries(entries) {
   checkAll(p);
   await refreshPreviews(p, [...new Set([...changed, ...setMatesOf(p, changed)])]);
   await saveMeta();
+  if (changed.length && p.kind === 'folder') {
+    const sm = summary(p);
+    const text = `${p.name} — nhập ${changed.length} ảnh reskin: ${sm.ok} đạt, ${sm.warn} cảnh báo, ${sm.error} lỗi`;
+    await touchRecent({ reskinAt: Date.now(), activity: text }); F.logActivity(text, sm.error ? 'warn' : 'ok');
+  }
   draw();
   if (changed.length) toast(`Đã nhập ${changed.length} ảnh reskin`, 'ok');
   if (unknown.length) toast(`${unknown.length} file không khớp tên nào (vd: ${unknown.slice(0, 3).join(', ')})`, 'warn');
@@ -415,25 +537,82 @@ async function exportBrief() {
   busy();
   download(zip, `${slug(p.name)}_brief.zip`);
   toast(`Đã xuất gói brief (${fmtBytes(zip.size)})`, 'ok');
+  const text = `${p.name} — xuất brief ${p.slots.length} ảnh (${fmtBytes(zip.size)})`;
+  await touchRecent({ briefAt: Date.now(), activity: text }); F.logActivity(text, 'warn');
+}
+
+/* ---------------- Artist jobs: a brief pack plus the artist's work, kept in this browser ---------------- */
+function setMode(mode, remember = true) {
+  app.mode = mode; document.documentElement.dataset.mode = mode || '';
+  if (remember) F.pref.set('mode', mode);
+}
+
+/** Open a brief zip as an Artist job (created on first open, reused after). */
+async function openBriefJob(file, z) {
+  const brief = JSON.parse(await z['brief.json'].text());
+  const id = `${brief.project}::${brief.created}`;
+  let job = await F.jobGet(id);
+  if (!job) {
+    const reps = brief.slots.filter((s) => s.idx === undefined || s.idx === 0).slice(0, 3);
+    job = { id, name: brief.project, briefName: file.name, received: Date.now(), total: brief.slots.length, brief: file,
+      thumbs: reps.map((s) => z[`originals/${s.dir ? s.dir + '/' : ''}${s.key}.png`]).filter(Boolean), reskins: [], fits: {}, done: 0, errors: 0 };
+    await F.jobPut(job);
+  }
+  await loadJob(job, z);
+}
+
+async function loadJob(job, z) {
+  busy('Đang mở project…');
+  z ||= await readZip(job.brief);
+  const brief = JSON.parse(await z['brief.json'].text());
+  const files = new Map();
+  for (const s of brief.slots) files.set(s.id, z[`originals/${s.dir ? s.dir + '/' : ''}${s.key}.png`]);
+  const p = newProject({ kind: 'brief', name: brief.project, engine: brief.engine, briefName: job.briefName, jobId: job.id,
+    slots: brief.slots.map((s) => ({ ...s, set: undefined, idx: undefined })), files });
+  for (const [g, v] of Object.entries(brief.groups || {})) if (p.groups[g]) p.groups[g].rule = v.rule;
+  p.fits = job.fits || {};
+  let i = 0;
+  for (const r of job.reskins || []) {
+    if (p.slotById.has(r.id)) p.reskins.set(r.id, await makeReskin(r.blob, r.name));
+    busy('Đang nạp ảnh đã vẽ…', ++i, job.reskins.length);
+  }
+  busy();
+  await finishLoad(p);
+}
+
+/** Persist the artist's work on the open job. sent=true marks it exported as of this save. */
+async function saveJob({ sent = false } = {}) {
+  const p = app.project; if (!p?.jobId) return;
+  const job = await F.jobGet(p.jobId); if (!job) return;
+  const sm = summary(p), now = Date.now();
+  await F.jobPut({ ...job, reskins: [...p.reskins].map(([id, r]) => ({ id, name: r.name, blob: r.blob })), fits: p.fits,
+    done: p.reskins.size, errors: sm.error, updatedAt: now, ...(sent ? { exportedAt: now } : {}) });
 }
 
 async function openZip(file) {
   busy('Đang đọc gói…');
   try {
     const z = await readZip(file);
+    busy();
     if (z['brief.json']) {
-      const brief = JSON.parse(await z['brief.json'].text());
-      const files = new Map();
-      for (const s of brief.slots) files.set(s.id, z[`originals/${s.dir ? s.dir + '/' : ''}${s.key}.png`]);
-      const p = newProject({ kind: 'brief', name: brief.project, engine: brief.engine, briefName: file.name, slots: brief.slots.map((s) => ({ ...s, set: undefined, idx: undefined })), files });
-      for (const [g, v] of Object.entries(brief.groups || {})) if (p.groups[g]) p.groups[g].rule = v.rule;
-      busy();
-      await finishLoad(p);
-      toast('Đã mở gói brief — kéo thả ảnh đã vẽ vào để kiểm tra', 'ok');
-    } else if (app.project) {
-      busy(); await importEntries([{ path: file.name, blob: file }]);
+      if (app.mode !== 'artist') { setMode('artist'); toast('Đây là gói brief cho Artist — đã chuyển sang chế độ Artist', 'ok'); }
+      await openBriefJob(file, z);
+      return;
+    }
+    const meta = z['reskin.json'] ? JSON.parse(await z['reskin.json'].text()) : null;
+    if (app.screen === 'workspace' && app.project) { await importEntries([{ path: file.name, blob: file }]); return; }
+    if (!meta) { toast('File zip này không phải gói của SkinForge. Mở project trước rồi kéo ảnh vào.', 'warn'); return; }
+    if (app.mode === 'artist') {
+      await refreshRecent();
+      const job = app.jobs.find((j) => j.name === meta.project);
+      if (!job) { toast(`Chưa có project “${meta.project}”. Mở gói brief của project đó trước.`, 'warn'); return; }
+      await loadJob(job); await importEntries([{ path: file.name, blob: file }]);
     } else {
-      busy(); toast('Đây không phải gói brief. Mở thư mục game trước rồi mới nhập gói reskin.', 'warn');
+      await refreshRecent();
+      const rec = app.recent.find((r) => r.name === meta.project);
+      if (!rec) { toast(`Chưa có dự án “${meta.project}”. Bấm “Thêm thư mục dự án” và chọn thư mục game đó trước.`, 'warn'); return; }
+      await openFolder(rec.handle);
+      if (app.project?.name === meta.project) await importEntries([{ path: file.name, blob: file }]);
     }
   } catch (e) { busy(); console.error(e); toast('Không đọc được file zip: ' + e.message, 'error'); }
 }
@@ -450,6 +629,7 @@ async function exportReskin() {
   busy();
   download(zip, `${slug(p.name)}_reskin.zip`);
   toast(`Đã xuất gói reskin (${p.reskins.size} ảnh, ${fmtBytes(zip.size)})`, 'ok');
+  if (p.kind === 'brief') await saveJob({ sent: true });
 }
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'project';
 
@@ -488,6 +668,8 @@ async function doApply() {
       busy('Đang ghi vào game…', ++i, a.ok.length);
     }
     if (a.backup) { p.lastBackup = a.stamp; await saveMeta(); }
+    const text = `${p.name} — áp dụng ${a.ok.length} ảnh vào game${a.backup ? ` (sao lưu ${a.stamp})` : ''}`;
+    await touchRecent({ appliedAt: Date.now(), activity: text }); F.logActivity(text, 'info');
     busy(); app.apply = null; draw();
     toast(`Đã áp dụng ${a.ok.length} ảnh vào game`, 'ok');
   } catch (e) { busy(); console.error(e); toast('Lỗi khi ghi file: ' + e.message, 'error'); }
@@ -524,8 +706,29 @@ document.addEventListener('click', async (e) => {
   if (el.tagName === 'A') e.preventDefault();
   if (act === 'open-folder') { try { await openFolder(await F.pickFolder()); } catch (err) { if (err.name !== 'AbortError') toast(err.message, 'error'); } }
   if (act === 'open-recent') { const rec = app.recent.find((r) => r.id === el.dataset.id); if (rec) await openFolder(rec.handle); }
-  if (act === 'forget') { await F.recentDelete(el.dataset.id); await refreshRecent(); draw(); }
+  if (act === 'forget') { if (confirm('Xoá dự án này khỏi danh sách? (Thư mục game không bị xoá.)')) { await F.recentDelete(el.dataset.id); await refreshRecent(); draw(); } }
   if (act === 'home') { app.screen = 'home'; app.project = null; await refreshRecent(); draw(); }
+  if (act === 'pick-mode') { setMode(el.dataset.mode, $('#rememberMode')?.checked !== false); await refreshRecent(); draw(); }
+  if (act === 'set-mode') { setMode(el.dataset.mode); draw(); }
+  if (act === 'recent-brief') {
+    const rec = app.recent.find((r) => r.id === el.dataset.id);
+    if (rec) { await openFolder(rec.handle); if (app.project?.recentId === rec.id) { try { await exportBrief(); } catch (err) { busy(); toast('Không xuất được brief: ' + err.message, 'error'); } } }
+  }
+  if (act === 'open-job') { const job = await F.jobGet(el.dataset.id); if (job) await loadJob(job); }
+  if (act === 'export-job') {
+    const job = await F.jobGet(el.dataset.id);
+    if (job) {
+      await loadJob(job);
+      try { await exportReskin(); } catch (err) { busy(); toast('Không xuất được gói reskin: ' + err.message, 'error'); }
+      app.screen = 'home'; app.project = null; await refreshRecent(); draw();   // exported from the home card: stay on home
+    }
+  }
+  if (act === 'forget-job') {
+    if (confirm('Xoá project này khỏi trình duyệt? Ảnh bạn đã kéo vào project sẽ mất (file gốc trên máy không bị xoá).')) {
+      await F.jobDelete(el.dataset.id); (thumbUrls.get(el.dataset.id) || []).forEach((u) => URL.revokeObjectURL(u)); thumbUrls.delete(el.dataset.id);
+      await refreshRecent(); draw();
+    }
+  }
   if (act === 'group') { app.group = el.dataset.g || null; draw(); }
   if (act === 'filter') { app.filter = el.dataset.f; draw(); }
   if (act === 'more') { app.limit = (app.limit || 120) + 120; draw(); }
@@ -586,6 +789,6 @@ addEventListener('drop', async (e) => {
 });
 
 // Dev only: lets automated tests open a folder without the native picker.
-if (import.meta.env.DEV) window.__skinforge = { app, openFolder, importEntries, openZip };
+if (import.meta.env.DEV) window.__skinforge = { app, openFolder, importEntries, openZip, loadJob, setMode, refreshRecent, draw };
 
 refreshRecent().then(draw);
