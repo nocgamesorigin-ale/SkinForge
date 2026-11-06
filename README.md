@@ -52,6 +52,7 @@ gợi ý nhanh), rồi ghi yêu cầu cho từng màn:
   có thể thuộc nhiều màn; thẻ hiện chip tên màn.
 - **Yêu cầu Art** và **Yêu cầu Anim**: mô tả tự do + **ảnh ref** (kéo vào hoặc chọn file; bấm ảnh để xem lớn).
 - Lưu trong `<game>/.reskin/project.json` (màn, asset, mô tả) và `<game>/.reskin/refs/<màn>/<art|anim|shot>/` (ảnh ref, ảnh tổng thể).
+- **Liên kết trực tiếp (Artist / Anim):** bấm “Liên kết yêu cầu từ Game Design” và chọn thư mục game (hoặc thư mục `.reskin` của nó — cùng máy, hoặc thư mục đồng bộ Drive / OneDrive), hay “Dùng dự án … trên máy này”. Danh sách màn, ảnh tổng thể, yêu cầu và ảnh ref được đọc thẳng từ `.reskin/` và tự cập nhật vài giây sau khi Game Design sửa — không cần xuất brief lại. Brief cũ cũng thấy màn / popup (tự quét code nếu Game Design chưa quét). Chrome / Edge.
 - **Đi theo brief:** Artist / Anim chọn màn ở cột trái để xem ảnh tổng thể, “Ghép bởi”, mô tả + ref (chỉ đọc) và chỉ các asset của màn đó. Mở brief mới của cùng project thì job cũ được cập nhật, ảnh đã vẽ vẫn giữ.
 
 ## Luồng làm việc

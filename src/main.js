@@ -293,11 +293,24 @@ function screensSide(p) {
       <span class="muted small">${sc.shot ? '<span class="has-shot" title="Có ảnh tổng thể">▣</span> ' : ''}${sc.slots.length}</span></button>`).join('');
   const unused = SC.PRESETS.filter((n) => !p.screens.some((s) => s.name === n));
   return `<span class="label">MÀN / POPUP</span>
-    ${items || `<span class="muted small side-note">${gd ? 'Nhóm asset theo nơi xuất hiện trong game để ghi yêu cầu cho Art / Anim.' : 'Brief này chưa có danh sách màn / popup (xuất trước khi có tính năng này). Nhờ Game Design xuất brief mới rồi mở lại — ảnh đã vẽ vẫn được giữ.'}</span>`}
+    ${gd ? '' : linkBox(p)}
+    ${items || `<span class="muted small side-note">${gd ? 'Nhóm asset theo nơi xuất hiện trong game để ghi yêu cầu cho Art / Anim.' : p.link ? 'Game Design chưa có màn / popup nào.' : 'Brief này chưa có danh sách màn / popup. Bấm “Liên kết yêu cầu từ Game Design” ở trên, hoặc nhờ Game Design xuất brief mới.'}</span>`}
     ${gd ? `<div class="row side-note"><button class="link small" data-act="add-screen">+ Thêm màn / popup</button>${p.root ? `<button class="link small" data-act="rescan" title="Tìm màn / popup và asset của chúng trong code game">Quét code game</button>` : ''}</div>
       ${p.unassigned?.length ? `<span class="muted small side-note">${p.unassigned.length} asset có trong code nhưng chưa rõ thuộc màn nào.</span>` : ''}
       ${unused.length && p.screens.length < 3 ? `<div class="presets">${unused.slice(0, 6).map((n) => `<button class="preset" data-act="add-preset" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}` : ''}
     <div class="side-sep"></div>`;
+}
+
+/** Artist / Anim: live link to Game Design's requests (the game folder or its .reskin folder). */
+function linkBox(p) {
+  if (p.link) return `<div class="linkbox on"><span class="dot"></span><b class="grow">Đang nhận yêu cầu từ Game Design</b>
+      <span class="muted small lb-full">${esc(p.link.name)} · tự cập nhật · lần cuối ${new Date(p.link.at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
+      <span class="lb-full row"><button class="link small" data-act="link-sync">Làm mới</button><button class="link small" data-act="link-off">Bỏ liên kết</button></span></div>`;
+  if (!F.fsSupported) return `<div class="linkbox"><span class="muted small">Muốn nhận yêu cầu trực tiếp từ Game Design, hãy mở trang bằng Chrome / Edge.</span></div>`;
+  return `<div class="linkbox"><span class="grow small">Màn / popup và yêu cầu do Game Design ghi — liên kết để tự cập nhật khi Game Design sửa.</span>
+    ${p.linkPending ? `<button class="btn small primary" data-act="link-resume">Kết nối lại ${esc(p.linkPending.name)}</button>` : ''}
+    ${app.linkLocal ? `<button class="btn small primary" data-act="link-local">Dùng dự án “${esc(app.linkLocal.name)}” trên máy này</button>` : ''}
+    <button class="btn small" data-act="link-pick">Liên kết yêu cầu từ Game Design…</button></div>`;
 }
 
 function reqPanel(p) {
@@ -710,7 +723,7 @@ async function saveMeta() {
   if (p.kind === 'brief') return saveJob();
   if (p.kind !== 'folder') return;
   const groups = Object.fromEntries(Object.values(p.groups).map((g) => [g.name, { rule: g.rule }]));
-  await F.writeJSON(p.root, '.reskin/project.json', { tool: 'SkinForge', version: 1, assetRoot: p.assetRoot, groups, fits: p.fits, lastBackup: p.lastBackup,
+  await F.writeJSON(p.root, '.reskin/project.json', { tool: 'SkinForge', version: 1, project: p.name, assetRoot: p.assetRoot, groups, fits: p.fits, lastBackup: p.lastBackup,
     screens: SC.serialize(p.screens) });
 }
 
@@ -864,6 +877,15 @@ async function loadJob(job, z) {
   for (const [g, v] of Object.entries(brief.groups || {})) if (p.groups[g]) p.groups[g].rule = v.rule;
   p.fits = job.fits || {};
   p.screens = await SC.revive(brief.screens, async (path) => z[`refs/${path}`] || null);
+  app.linkLocal = null;
+  if (job.link) {
+    const ok = job.link.queryPermission ? (await job.link.queryPermission({ mode: 'read' })) === 'granted' : true;
+    if (ok) { try { await linkSync(p, job.link, { quiet: true }); } catch {} } else p.linkPending = job.link;
+  }
+  if (!p.link && F.fsSupported) {
+    const rec = (await F.recentList()).find((r) => r.name === brief.project && r.handle);
+    if (rec) app.linkLocal = rec.handle;
+  }
   let i = 0;
   for (const r of job.reskins || []) {
     if (p.slotById.has(r.id)) p.reskins.set(r.id, await makeReskin(r.blob, r.name));
@@ -881,6 +903,60 @@ async function saveJob({ sent = false } = {}) {
   await F.jobPut({ ...job, reskins: [...p.reskins].map(([id, r]) => ({ id, name: r.name, blob: r.blob })), fits: p.fits,
     done: p.reskins.size, errors: sm.error, updatedAt: now, ...(sent ? { exportedAt: now } : {}) });
 }
+
+/* ---------- Artist / Anim ← Game Design: requests read live from <game>/.reskin (same machine or a synced folder) ---------- */
+async function linkFiles(handle) {
+  for (const pre of ['.reskin/', '']) {
+    try { const f = await F.getFile(handle, `${pre}project.json`); return { pre, file: f }; } catch {}
+  }
+  return null;
+}
+
+async function linkSync(p, handle, { quiet = false } = {}) {
+  const found = await linkFiles(handle);
+  if (!found) { if (!quiet) toast('Không thấy yêu cầu của Game Design trong thư mục này (cần thư mục game hoặc thư mục .reskin)', 'error'); return false; }
+  const saved = JSON.parse(await found.file.text());
+  let screens = await SC.revive(saved.screens || [], async (path) => { try { return await F.getFile(handle, `${found.pre}refs/${path}`); } catch { return null; } });
+  // Game Design has not scanned this game yet: find the screens in its code here (read only)
+  if (!screens.some((s) => s.auto) && found.pre) {
+    try { const r = await detectScreens(handle, p.slots, saved.assetRoot || ''); SC.mergeDetected(screens, r.screens); } catch (e) { console.warn(e); }
+  }
+  for (const sc of screens) sc.slots = sc.slots.filter((id) => p.slotById.has(id));
+  for (const sc of p.screens) { for (const role of Object.keys(SC.ROLES)) sc[role].refs.forEach((r) => URL.revokeObjectURL(r.url)); if (sc.shot) URL.revokeObjectURL(sc.shot.url); }
+  p.screens = screens;
+  if (app.screenSel && !screens.some((s) => s.id === app.screenSel)) app.screenSel = null;
+  p.link = { handle, name: handle.name === '.reskin' ? saved.project || 'Game Design' : handle.name, at: Date.now(), mtime: found.file.lastModified };
+  p.linkPending = null;
+  return true;
+}
+
+async function linkStart(p, handle) {
+  if (!(await F.ensurePermission(handle, 'read'))) { toast('Chưa được cấp quyền đọc thư mục', 'error'); return; }
+  busy('Đang lấy yêu cầu của Game Design…');
+  try {
+    if (!(await linkSync(p, handle))) return;
+    const job = await F.jobGet(p.jobId); if (job) await F.jobPut({ ...job, link: handle });
+    toast(`Đã liên kết — ${p.screens.length} màn / popup`, 'ok');
+  } finally { busy(); draw(); }
+}
+
+/** Re-read when Game Design saves (checked every few seconds and when the tab comes back). */
+async function linkPoll() {
+  const p = app.project;
+  if (!p?.link || app.screen !== 'workspace' || app._linkBusy) return;
+  app._linkBusy = true;
+  try {
+    const found = await linkFiles(p.link.handle);
+    if (found && found.file.lastModified !== p.link.mtime) {
+      await linkSync(p, p.link.handle, { quiet: true });
+      if (!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) && !app.detail && !app.crop) draw();
+      toast('Game Design vừa cập nhật yêu cầu', 'ok');
+    }
+  } catch { /* folder moved or permission dropped: keep what we have */ }
+  finally { app._linkBusy = false; }
+}
+setInterval(linkPoll, 4000);
+addEventListener('focus', linkPoll);
 
 async function openZip(file) {
   busy('Đang đọc gói…');
@@ -1052,6 +1128,11 @@ document.addEventListener('click', async (e) => {
     }
   }
   if (act === 'open-ref') { app.lightbox = el.dataset.url; draw(); }
+  if (act === 'link-pick') { try { await linkStart(p, await window.showDirectoryPicker({ id: 'skinforge-link', mode: 'read' })); } catch (err) { if (err.name !== 'AbortError') toast(err.message, 'error'); } }
+  if (act === 'link-local' && app.linkLocal) await linkStart(p, app.linkLocal);
+  if (act === 'link-resume' && p.linkPending) await linkStart(p, p.linkPending);
+  if (act === 'link-sync' && p.link) { await linkSync(p, p.link.handle); draw(); }
+  if (act === 'link-off') { const job = await F.jobGet(p.jobId); if (job) { delete job.link; await F.jobPut(job); } p.link = null; draw(); toast('Đã bỏ liên kết — giữ yêu cầu đang có'); }
   if (act === 'rescan') { await scanCode(p); await saveMeta(); draw(); }
   if (act === 'shot-capture') {
     if (!navigator.mediaDevices?.getDisplayMedia) { toast('Trình duyệt này không hỗ trợ chụp màn hình — hãy dán ảnh (Ctrl+V) hoặc tải ảnh', 'warn'); return; }
