@@ -27,14 +27,32 @@ Lần đầu mở, SkinForge hỏi vai trò (nhớ trên máy, đổi được �
 
 ## Màn / popup và yêu cầu
 
-Game Design nhóm asset theo nơi chúng xuất hiện trong game (Popup Complete, Popup Out of Moves, Shop, Main Menu… — có
+**Tự nhận diện từ code game** (khi mở thư mục lần đầu, hoặc bấm “Quét code game”): SkinForge đọc source của game và tự
+tạo danh sách màn / popup kèm asset của từng cái:
+
+- **Game web** (Falcon IDE, GameKit, Vite…): container trong HTML (`<section class="screen">`, `.panel`, `#shopPopup`,
+  `<dialog>`…) và mọi element id bên trong; rồi các dòng JS / TS / CSS đụng tới những id đó và gọi tên asset
+  (`img/ui/deal_${kind}.webp` → mọi `deal_*`); dữ liệu game dạng JSON (`{"tiers":[{"bg":"bg2"}]}` + `D.tiers` trong code).
+  Thư mục toàn bộ ảnh (vd `items/`) được gọi theo biến (`"img/items/" + name`) được ghi là **đổi theo món đang chơi**.
+- **Unity**: prefab / scene tên kiểu `*Panel`, `*Popup`, `*Screen`… → GUID sprite → file `.meta` của ảnh.
+- **Godot**: `*.tscn` → `ext_resource path="res://…"`.
+- Kết quả là gợi ý: Game Design sửa / gán thêm / bỏ bớt như màn tạo tay. Asset có trong code nhưng chưa rõ thuộc màn nào
+  được đếm riêng.
+
+**Ảnh tổng thể** của mỗi màn (để Art / Anim thấy popup được ghép bởi những gì): bấm **Chụp từ game** (chọn tab / cửa sổ
+game đang mở đúng popup → kéo chọn vùng), **dán** ảnh (Ctrl+V) hoặc **tải ảnh**. Nếu game có sẵn ảnh chụp trong
+`<game>/.reskin/shots/<id>.png|webp` (id = id của element / tên prefab, vd `cleanedPanel.webp`) thì được lấy tự động.
+Cạnh ảnh là **Ghép bởi**: số ảnh / bộ dùng từ từng thư mục (vd `ui 5 ảnh` + `items 80 bộ · đổi theo món đang chơi`) và
+hình nhỏ từng asset (bấm để mở chi tiết).
+
+Game Design cũng có thể tự nhóm asset theo nơi chúng xuất hiện (Popup Complete, Popup Out of Moves, Shop, Main Menu… — có
 gợi ý nhanh), rồi ghi yêu cầu cho từng màn:
 
 - **Gán asset:** bấm “Chọn để gán vào màn”, chọn nhiều thẻ (một bộ ảnh tính là một thẻ), chọn màn → **Gán**. Một asset
   có thể thuộc nhiều màn; thẻ hiện chip tên màn.
 - **Yêu cầu Art** và **Yêu cầu Anim**: mô tả tự do + **ảnh ref** (kéo vào hoặc chọn file; bấm ảnh để xem lớn).
-- Lưu trong `<game>/.reskin/project.json` (màn, asset, mô tả) và `<game>/.reskin/refs/<màn>/<art|anim>/` (ảnh ref).
-- **Đi theo brief:** Artist / Anim chọn màn ở cột trái để xem mô tả + ref (chỉ đọc) và chỉ các asset của màn đó.
+- Lưu trong `<game>/.reskin/project.json` (màn, asset, mô tả) và `<game>/.reskin/refs/<màn>/<art|anim|shot>/` (ảnh ref, ảnh tổng thể).
+- **Đi theo brief:** Artist / Anim chọn màn ở cột trái để xem ảnh tổng thể, “Ghép bởi”, mô tả + ref (chỉ đọc) và chỉ các asset của màn đó.
 
 ## Luồng làm việc
 
@@ -85,5 +103,7 @@ Mỗi lần push lên `main`, `.github/workflows/deploy.yml` build và đăng l�
 - `src/fsx.js` — đọc/ghi thư mục (File System Access API), nhận diện engine, project gần đây (IndexedDB).
 - `src/imaging.js` — phân tích ảnh (kích thước, alpha, vùng có hình), dựng ảnh xuất vào khung gốc.
 - `src/project.js` — slot, nhóm, bộ ảnh, khớp tên, các bước kiểm tra, tự căn.
+- `src/screens.js` — màn / popup, yêu cầu Art / Anim, ảnh ref + ảnh tổng thể, đếm asset theo thư mục.
+- `src/detect.js` — tìm màn / popup và asset của chúng trong code game (HTML/JS/CSS/JSON, Unity prefab, Godot tscn).
 - `src/zipx.js` — gói brief / gói reskin (fflate).
 - `src/main.js` — giao diện.

@@ -263,6 +263,30 @@ html[data-mode="artist"] .card:hover { border-color: var(--pink); }
 .selbar select { height: 40px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--surface); padding: 0 10px; font: inherit; color: var(--ink); min-width: 220px; }
 .lightbox { flex-direction: column; gap: 12px; cursor: zoom-out; } .lightbox img { max-width: 92vw; max-height: 86vh; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.5); background: #fff; }
 
+/* overview of a screen: screenshot + what it is made of */
+.btn.small { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.bd-mini { font-size: 11px; color: var(--muted); } .bd-mini .req-on { color: var(--accent); } .has-shot { color: var(--accent); } .bd-mini b { color: var(--ink-2); font-weight: 600; } .bd-mini i { font-style: normal; color: var(--accent); }
+.overview { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 16px; padding: 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); }
+.shot { display: flex; flex-direction: column; gap: 8px; }
+.shot-img { padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #000; cursor: zoom-in; display: block; }
+.shot-img img { display: block; width: 100%; max-height: 380px; object-fit: contain; }
+.shot-empty { min-height: 200px; border: 2px dashed var(--line-2); border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 14px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.shot-empty svg { width: 20px; height: 20px; }
+.shot-acts { gap: 6px; flex-wrap: wrap; }
+.composed { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.composed code { font-size: 11px; }
+.bd { display: flex; flex-wrap: wrap; gap: 8px; }
+.bd-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; color: var(--ink); font: inherit; text-align: left; }
+.bd-row span { font-size: 12px; color: var(--muted); }
+.ovthumbs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ovthumb { width: 54px; height: 54px; padding: 3px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface) repeating-conic-gradient(var(--surface-2) 0 25%, transparent 0 50%) 0 0 / 12px 12px; cursor: pointer; }
+.ovthumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cropbox { background: var(--surface); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 12px; max-width: 94vw; max-height: 94vh; }
+.cropstage { position: relative; cursor: crosshair; user-select: none; touch-action: none; overflow: hidden; display: flex; justify-content: center; }
+.cropstage img { max-width: 90vw; max-height: 78vh; display: block; }
+.croprect { position: absolute; border: 2px solid var(--accent); background: rgba(79, 70, 229, .15); box-shadow: 0 0 0 9999px rgba(0,0,0,.45); pointer-events: none; }
+@media (max-width: 720px) { .overview { grid-template-columns: 1fr; } }
+
 /* overlays */
 .dropveil { position: fixed; inset: 0; z-index: 15; background: rgba(79, 70, 229, .12); border: 3px dashed var(--accent); display: none; align-items: center; justify-content: center; pointer-events: none; }
 .dropveil div { background: var(--surface); padding: 24px 32px; border-radius: 16px; display: flex; flex-direction: column; align-items: center; gap: 6px; box-shadow: 0 12px 30px rgba(0,0,0,.2); }

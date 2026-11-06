@@ -3,6 +3,7 @@ import * as F from './fsx.js';
 import { render, toPNG, fmtBytes, fmtSec } from './imaging.js';
 import { animTypeLabel } from './anim.js';
 import * as SC from './screens.js';
+import { detectScreens } from './detect.js';
 import { RULES, SAFE, KINDS, kindOf, isRaw, buildSlots, findSets, defaultGroups, matcher, makeReskin, checkAll, autoFit, summary } from './project.js';
 import { makeZip, readZip, download } from './zipx.js';
 
@@ -23,7 +24,7 @@ const STATUS = {
 
 // mode: 'gd' (Game Design: owns the game folders) | 'artist' (opens brief packs only) | null (not chosen yet)
 const app = { screen: 'home', mode: F.pref.get('mode'), project: null, filter: 'all', kind: 'all', group: null, search: '', recent: [], jobs: [], detail: null, safe: true,
-  screenSel: null, selecting: false, selected: new Set(), lightbox: null };
+  screenSel: null, selecting: false, selected: new Set(), lightbox: null, crop: null };
 const urls = new Map();   // slot id → object URL of the original
 const thumbUrls = new Map();   // job id → [object URLs]
 const root = $('#app');
@@ -35,6 +36,7 @@ function draw() {
   root.innerHTML = app.screen !== 'home' ? workspaceView() : !app.mode ? modePickerView() : app.mode === 'gd' ? homeGDView() : homeArtistView();
   if (app.detail) root.insertAdjacentHTML('beforeend', detailView());
   if (app.apply) root.insertAdjacentHTML('beforeend', applyView());
+  if (app.crop) root.insertAdjacentHTML('beforeend', cropView());
   if (app.lightbox) root.insertAdjacentHTML('beforeend', `<div class="modal lightbox" data-act="close-lightbox" role="dialog" aria-modal="true" aria-label="Ảnh ref"><img src="${app.lightbox}" alt="Ảnh ref"><button class="iconbtn" data-act="close-lightbox" aria-label="Đóng">${ICON.close}</button></div>`);
 }
 function toast(msg, kind = '') {
@@ -286,12 +288,13 @@ function decorate(html, c) {
 function screensSide(p) {
   const gd = p.kind === 'folder';
   const items = p.screens.map((sc) => `<button class="gbtn ${app.screenSel === sc.id ? 'on' : ''}" data-act="select-screen" data-id="${sc.id}">
-      <span><span>${esc(sc.name)}</span><small class="rule">${[sc.art.text || sc.art.refs.length ? 'Art' : '', sc.anim.text || sc.anim.refs.length ? 'Anim' : ''].filter(Boolean).join(' · ') || (gd ? 'Chưa có yêu cầu' : '')}</small></span>
-      <span class="muted small">${sc.slots.length}</span></button>`).join('');
+      <span><span>${esc(sc.name)}</span><small class="rule bd-mini">${bdMini(sc, p)}${(() => { const r = [sc.art.text || sc.art.refs.length ? 'Art' : '', sc.anim.text || sc.anim.refs.length ? 'Anim' : ''].filter(Boolean); return r.length ? ` · <b class="req-on">Yêu cầu ${r.join(' + ')}</b>` : ''; })()}</small></span>
+      <span class="muted small">${sc.shot ? '<span class="has-shot" title="Có ảnh tổng thể">▣</span> ' : ''}${sc.slots.length}</span></button>`).join('');
   const unused = SC.PRESETS.filter((n) => !p.screens.some((s) => s.name === n));
   return `<span class="label">MÀN / POPUP</span>
     ${items || `<span class="muted small side-note">${gd ? 'Nhóm asset theo nơi xuất hiện trong game để ghi yêu cầu cho Art / Anim.' : 'Game Design chưa chia asset theo màn / popup.'}</span>`}
-    ${gd ? `<button class="link small side-note" data-act="add-screen">+ Thêm màn / popup</button>
+    ${gd ? `<div class="row side-note"><button class="link small" data-act="add-screen">+ Thêm màn / popup</button>${p.root ? `<button class="link small" data-act="rescan" title="Tìm màn / popup và asset của chúng trong code game">Quét code game</button>` : ''}</div>
+      ${p.unassigned?.length ? `<span class="muted small side-note">${p.unassigned.length} asset có trong code nhưng chưa rõ thuộc màn nào.</span>` : ''}
       ${unused.length && p.screens.length < 3 ? `<div class="presets">${unused.slice(0, 6).map((n) => `<button class="preset" data-act="add-preset" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}` : ''}
     <div class="side-sep"></div>`;
 }
@@ -313,8 +316,48 @@ function reqPanel(p) {
   return `<section class="reqpanel">
     <div class="reqpanel-h"><div><b>${esc(sc.name)}</b><span class="muted small"> · ${sc.slots.length} asset</span></div>
       ${gd ? `<div class="row"><button class="link small" data-act="rename-screen">Đổi tên</button><button class="link small danger" data-act="del-screen">Xoá màn</button></div>` : ''}</div>
+    ${overview(p, sc, gd)}
     <div class="reqs">${role('art')}${role('anim')}</div>
   </section>`;
+}
+
+/** Group counts for the side list: "ui 9 · items 80*" (* = picked at runtime). */
+function bdMini(sc, p) {
+  return SC.breakdown(sc, p).map((r) => `<span>${esc(r.group)} <b>${r.dyn ? r.total : r.cards}</b>${r.dyn ? '<i title="Đổi theo món đang chơi">*</i>' : ''}</span>`).join(' · ');
+}
+
+/** Overview image of the screen + which assets it is made of. */
+function overview(p, sc, gd) {
+  const rows = SC.breakdown(sc, p);
+  const shown = sc.slots.map((id) => p.slotById.get(id)).filter((s) => s && s.kind !== 'sound' && s.kind !== 'anim');
+  const seen = new Set(), thumbs = [];
+  for (const s of shown) { const k = s.set || s.id; if (seen.has(k)) continue; seen.add(k); thumbs.push(s); }
+  const sounds = sc.slots.filter((id) => p.slotById.get(id)?.kind === 'sound').length;
+  return `<div class="overview">
+    <div class="shot">
+      ${sc.shot ? `<button class="shot-img" data-act="open-ref" data-url="${sc.shot.url}" aria-label="Xem ảnh tổng thể"><img src="${sc.shot.url}" alt="Ảnh tổng thể ${esc(sc.name)}"></button>`
+        : `<div class="shot-empty">${ICON.upload}<span>${gd ? 'Chưa có ảnh tổng thể.<br>Mở popup này trong game rồi bấm “Chụp từ game”, hoặc dán ảnh (Ctrl+V).' : 'Game Design chưa gửi ảnh tổng thể.'}</span></div>`}
+      ${gd ? `<div class="row shot-acts"><button class="btn small" data-act="shot-capture">Chụp từ game</button>
+        <label class="btn small">Tải ảnh<input type="file" accept="image/*" data-act="shot-file" hidden></label>
+        ${sc.shot ? `<button class="link small danger" data-act="shot-del">Xoá</button>` : ''}</div>` : ''}
+    </div>
+    <div class="composed">
+      <div><b>Ghép bởi</b>${sc.auto ? `<span class="muted small"> · tìm thấy trong <code>${esc(sc.auto.file)}</code></span>` : ''}</div>
+      <div class="bd">${rows.map((r) => `<button class="bd-row" data-act="group" data-g="${esc(r.group)}" title="Xem cả thư mục ${esc(r.group)}"><b>${esc(r.group)}</b>
+        <span>${r.dyn ? `${r.total} bộ · đổi theo món đang chơi` : `${r.cards} ${r.cards === r.files ? 'ảnh' : 'bộ / ảnh'}`}</span></button>`).join('') || '<span class="muted small">Chưa có asset.</span>'}</div>
+      ${thumbs.length ? `<div class="ovthumbs">${thumbs.slice(0, 40).map((s) => `<button class="ovthumb" data-act="detail" data-id="${esc(s.set || s.id)}" title="${esc(s.set ? p.sets[s.set].name : s.key)}"><img src="${origUrl(s)}" alt="${esc(s.key)}" loading="lazy"></button>`).join('')}${thumbs.length > 40 ? `<span class="muted small">+${thumbs.length - 40}</span>` : ''}</div>` : ''}
+      ${sounds ? `<span class="muted small">+ ${sounds} âm thanh</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function cropView() {
+  const c = app.crop;
+  return `<div class="modal" role="dialog" aria-modal="true" aria-label="Cắt ảnh tổng thể"><div class="cropbox">
+    <div class="row"><b class="grow">Kéo chuột để chọn vùng popup (bỏ qua để dùng cả ảnh)</b>
+      <button class="btn" data-act="crop-cancel">Huỷ</button><button class="btn primary" data-act="crop-ok">Dùng ảnh này</button></div>
+    <div class="cropstage" id="cropStage"><img src="${c.url}" alt="Ảnh vừa chụp" draggable="false"><div class="croprect" id="cropRect" hidden></div></div>
+  </div></div>`;
 }
 
 function selectBar(p) {
@@ -577,7 +620,10 @@ async function openFolder(handle) {
       }
     }
     p.recentId = `${info.name}::${handle.name}`;
+    const firstScan = !p.screens.some((s) => s.auto);
+    if (firstScan) await scanCode(p, true);
     await finishLoad(p);
+    if (firstScan && p.screens.some((s) => s.auto)) await saveMeta();
     const prev = (await F.recentGet(p.recentId)) || {};
     await F.recentPut({ ...prev, id: p.recentId, name: info.name, engine: info.engine, handle, path: handle.name + (info.assetRoot ? '/' + info.assetRoot : ''),
       opened: Date.now(), assets: slots.length, sets: Object.keys(p.sets).length, done: p.reskins.size, bytes: slots.reduce((a, s) => a + s.bytes, 0) });
@@ -590,6 +636,49 @@ async function openFolder(handle) {
 function newProject(o) {
   const sets = findSets(o.slots);
   return { reskins: new Map(), fits: {}, lastBackup: null, screens: [], ...o, sets, groups: defaultGroups(o.slots, sets), slotById: new Map(o.slots.map((s) => [s.id, s])) };
+}
+
+/** Find screens / popups and their assets in the game's code; overview images from .reskin/shots/<id>.png. */
+async function scanCode(p, quiet = false) {
+  busy('Đang tìm màn / popup trong code game…');
+  try {
+    const r = await detectScreens(p.root, p.slots, p.assetRoot);
+    const res = SC.mergeDetected(p.screens, r.screens);
+    p.unassigned = r.unassigned;
+    const shots = await F.tryGetDir(p.root, '.reskin/shots');
+    if (shots) for (const sc of p.screens) {
+      if (!sc.auto || sc.shot) continue;
+      const id = sc.auto.key.split('#').pop().split('/').pop().replace(/\.[^.]+$/, '');
+      for (const e of ['png', 'webp', 'jpg', 'jpeg']) {
+        try { const f = await (await shots.getFileHandle(`${id}.${e}`)).getFile(); await setShot(p, sc, f, `shot.${e}`); break; } catch {}
+      }
+    }
+    if (!quiet || r.screens.length) toast(r.screens.length ? `Tìm thấy ${r.screens.length} màn / popup trong code (${res.added} mới)` : 'Không tìm thấy màn / popup nào trong code game', r.screens.length ? 'ok' : 'warn');
+    return res;
+  } catch (e) { console.error(e); if (!quiet) toast('Không quét được code: ' + e.message, 'error'); }
+  finally { busy(); }
+}
+
+async function setShot(p, sc, blob, name = 'shot.png') {
+  if (sc.shot) { URL.revokeObjectURL(sc.shot.url); if (p.kind === 'folder' && sc.shot.name !== name) await SC.folderRef.remove(p.root, SC.refPath(sc, 'shot', sc.shot.name)); }
+  if (p.kind === 'folder') await SC.folderRef.write(p.root, SC.refPath(sc, 'shot', name), blob);
+  sc.shot = { name, blob, url: URL.createObjectURL(blob) };
+}
+
+/** Pick the game's tab / window and grab one frame of it. */
+async function captureFrame() {
+  const stream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: 'browser' }, audio: false, selfBrowserSurface: 'exclude' });
+  try {
+    const v = document.createElement('video'); v.srcObject = stream; v.muted = true; await v.play();
+    await new Promise((r) => setTimeout(r, 350));
+    const c = new OffscreenCanvas(v.videoWidth, v.videoHeight); c.getContext('2d').drawImage(v, 0, 0);
+    return await c.convertToBlob({ type: 'image/png' });
+  } finally { stream.getTracks().forEach((t) => t.stop()); }
+}
+
+async function openCrop(blob) {
+  const bmp = await createImageBitmap(blob);
+  app.crop = { blob, url: URL.createObjectURL(blob), w: bmp.width, h: bmp.height, rect: null }; bmp.close?.(); draw();
 }
 
 async function finishLoad(p) {
@@ -707,7 +796,7 @@ async function exportBrief() {
         ...(kind === 'anim' ? { animType, names, skins, fps, duration, frames, textures, label, bones, version, tags } : {}) })) };
   // screens / popups with the Art + Anim requests travel with the brief; their ref images go in refs/
   brief.screens = SC.serialize(p.screens, new Set(slots.map((s) => s.id)));
-  for (const sc of p.screens) for (const role of Object.keys(SC.ROLES)) for (const r of sc[role].refs) files[`refs/${SC.refPath(sc, role, r.name)}`] = r.blob;
+  for (const sc of p.screens) for (const [path, blob] of SC.screenFiles(sc)) files[`refs/${path}`] = blob;
   files['brief.json'] = JSON.stringify(brief, null, 2);
   files['HUONG-DAN.txt'] = [
     `Gói brief reskin: ${p.name} (${slots.length - nFx - nAnim} art, ${nFx} effect, ${nAnim} file animation)`, '',
@@ -927,6 +1016,7 @@ document.addEventListener('click', async (e) => {
     if (sc && confirm(`Xoá “${sc.name}”? Asset không bị xoá, chỉ bỏ nhóm và yêu cầu của màn này.`)) {
       if (p.kind === 'folder') await SC.folderRef.removeScreen(p.root, sc.id);
       for (const role of Object.keys(SC.ROLES)) sc[role].refs.forEach((r) => URL.revokeObjectURL(r.url));
+      if (sc.shot) URL.revokeObjectURL(sc.shot.url);
       p.screens = p.screens.filter((x) => x !== sc); app.screenSel = null; await saveMeta(); draw();
     }
   }
@@ -951,6 +1041,27 @@ document.addEventListener('click', async (e) => {
     }
   }
   if (act === 'open-ref') { app.lightbox = el.dataset.url; draw(); }
+  if (act === 'rescan') { await scanCode(p); await saveMeta(); draw(); }
+  if (act === 'shot-capture') {
+    if (!navigator.mediaDevices?.getDisplayMedia) { toast('Trình duyệt này không hỗ trợ chụp màn hình — hãy dán ảnh (Ctrl+V) hoặc tải ảnh', 'warn'); return; }
+    try { await openCrop(await captureFrame()); } catch (err) { if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') toast('Không chụp được: ' + err.message, 'error'); }
+  }
+  if (act === 'shot-del') {
+    const sc = curScreen(); if (!sc?.shot) return;
+    if (p.kind === 'folder') await SC.folderRef.remove(p.root, SC.refPath(sc, 'shot', sc.shot.name));
+    URL.revokeObjectURL(sc.shot.url); sc.shot = null; await saveMeta(); draw();
+  }
+  if (act === 'crop-cancel') { URL.revokeObjectURL(app.crop.url); app.crop = null; draw(); }
+  if (act === 'crop-ok') {
+    const c = app.crop, sc = curScreen(); let blob = c.blob;
+    if (c.rect && c.rect.w > 8 && c.rect.h > 8) {
+      const bmp = await createImageBitmap(c.blob, Math.round(c.rect.x), Math.round(c.rect.y), Math.round(c.rect.w), Math.round(c.rect.h));
+      const cv = new OffscreenCanvas(bmp.width, bmp.height); cv.getContext('2d').drawImage(bmp, 0, 0); blob = await cv.convertToBlob({ type: 'image/png' });
+    }
+    URL.revokeObjectURL(c.url); app.crop = null;
+    if (sc) { await setShot(p, sc, blob, 'shot.png'); await saveMeta(); toast('Đã lưu ảnh tổng thể', 'ok'); }
+    draw();
+  }
   if (act === 'close-lightbox') { app.lightbox = null; draw(); }
   if (el.tagName === 'A') e.preventDefault();
   if (act === 'open-folder') { try { await openFolder(await F.pickFolder()); } catch (err) { if (err.name !== 'AbortError') toast(err.message, 'error'); } }
@@ -1019,6 +1130,10 @@ document.addEventListener('change', async (e) => {
   }
   if (act === 'toggle-safe') { app.safe = el.checked; draw(); }
   if (act === 'opt-backup') app.apply.backup = el.checked;
+  if (act === 'shot-file' && el.files[0]) {
+    const sc = app.project.screens.find((x) => x.id === app.screenSel);
+    if (sc) await openCrop(el.files[0]);
+  }
   if (act === 'req-text' || act === 'add-ref') {
     const p = app.project, sc = p.screens.find((x) => x.id === app.screenSel), role = el.dataset.role;
     if (sc && act === 'req-text') { sc[role].text = el.value; await saveMeta(); }
@@ -1040,7 +1155,8 @@ document.addEventListener('input', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (app.lightbox) { app.lightbox = null; draw(); } else if (app.detail || app.apply) { app.detail = null; app.apply = null; draw(); }
+  if (app.crop) { URL.revokeObjectURL(app.crop.url); app.crop = null; draw(); }
+  else if (app.lightbox) { app.lightbox = null; draw(); } else if (app.detail || app.apply) { app.detail = null; app.apply = null; draw(); }
   else if (app.selecting) { app.selecting = false; app.selected.clear(); draw(); }
 });
 let dragDepth = 0;
@@ -1059,3 +1175,29 @@ addEventListener('drop', async (e) => {
 if (import.meta.env.DEV) window.__skinforge = { app, openFolder, importEntries, openZip, loadJob, setMode, refreshRecent, draw };
 
 refreshRecent().then(draw);
+
+/* overview: paste a screenshot (Ctrl+V) into the selected screen */
+document.addEventListener('paste', async (e) => {
+  const p = app.project;
+  if (!p || p.kind !== 'folder' || !app.screenSel || app.crop || /^(TEXTAREA|INPUT)$/.test(document.activeElement?.tagName)) return;
+  const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));
+  if (!item) return;
+  e.preventDefault(); await openCrop(item.getAsFile());
+});
+
+/* crop: drag a rectangle on the captured image */
+document.addEventListener('pointerdown', (e) => {
+  const stage = e.target.closest?.('#cropStage'); if (!stage || !app.crop) return;
+  e.preventDefault();
+  const img = stage.querySelector('img'), box = img.getBoundingClientRect(), rect = $('#cropRect');
+  const sx = app.crop.w / box.width, sy = app.crop.h / box.height;
+  const x0 = Math.min(Math.max(e.clientX - box.left, 0), box.width), y0 = Math.min(Math.max(e.clientY - box.top, 0), box.height);
+  const move = (ev) => {
+    const x1 = Math.min(Math.max(ev.clientX - box.left, 0), box.width), y1 = Math.min(Math.max(ev.clientY - box.top, 0), box.height);
+    const l = Math.min(x0, x1), t = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+    Object.assign(rect.style, { left: img.offsetLeft + l + 'px', top: img.offsetTop + t + 'px', width: w + 'px', height: h + 'px' }); rect.hidden = false;
+    app.crop.rect = { x: l * sx, y: t * sy, w: w * sx, h: h * sy };
+  };
+  const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
+});

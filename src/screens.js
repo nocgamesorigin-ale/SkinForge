@@ -6,7 +6,9 @@ export const PRESETS = ['Popup Complete', 'Popup Out of Moves', 'Shop', 'Main Me
 export const ROLES = { art: 'Yêu cầu Art', anim: 'Yêu cầu Anim' };
 
 export function newScreen(name) {
-  return { id: 'sc_' + Math.random().toString(36).slice(2, 8), name, slots: [], art: { text: '', refs: [] }, anim: { text: '', refs: [] } };
+  return { id: 'sc_' + Math.random().toString(36).slice(2, 8), name, slots: [], art: { text: '', refs: [] }, anim: { text: '', refs: [] },
+    auto: null,    // { key, file, kind, dyn:[group] } when found in the game's code
+    shot: null };  // overview image of the whole screen: { name, blob, url }
 }
 
 /** slot id → [screen names] */
@@ -21,6 +23,7 @@ export const serialize = (screens, keepSlots = null) => screens.map((sc) => ({
   id: sc.id, name: sc.name, slots: keepSlots ? sc.slots.filter((id) => keepSlots.has(id)) : sc.slots,
   art: { text: sc.art.text, refs: sc.art.refs.map((r) => ({ name: r.name })) },
   anim: { text: sc.anim.text, refs: sc.anim.refs.map((r) => ({ name: r.name })) },
+  ...(sc.auto ? { auto: sc.auto } : {}), ...(sc.shot ? { shot: { name: sc.shot.name } } : {}),
 }));
 
 export const refPath = (sc, role, name) => `${sc.id}/${role}/${name}`;
@@ -29,7 +32,8 @@ export const refPath = (sc, role, name) => `${sc.id}/${role}/${name}`;
 export async function revive(saved, getRef) {
   const out = [];
   for (const s of saved || []) {
-    const sc = { ...newScreen(s.name), id: s.id, slots: s.slots || [] };
+    const sc = { ...newScreen(s.name), id: s.id, slots: s.slots || [], auto: s.auto || null };
+    if (s.shot) { const blob = await getRef(refPath(sc, 'shot', s.shot.name)); if (blob) sc.shot = { name: s.shot.name, blob, url: URL.createObjectURL(blob) }; }
     for (const role of Object.keys(ROLES)) {
       sc[role].text = s[role]?.text || '';
       for (const r of s[role]?.refs || []) {
@@ -56,4 +60,45 @@ export function refName(existing, file) {
   let name = base, n = 2;
   while (existing.some((r) => r.name === name)) name = base.replace(/(\.[^.]+)?$/, `_${n++}$1`);
   return name;
+}
+
+/** Every stored image of a screen as [path, blob] (refs + overview), for the brief. */
+export function screenFiles(sc) {
+  const out = [];
+  for (const role of Object.keys(ROLES)) for (const r of sc[role].refs) out.push([refPath(sc, role, r.name), r.blob]);
+  if (sc.shot) out.push([refPath(sc, 'shot', sc.shot.name), sc.shot.blob]);
+  return out;
+}
+
+/** Merge screens found in the game's code: update the ones found before (by key), add new ones. Manual assets stay. */
+export function mergeDetected(screens, found) {
+  let added = 0, updated = 0;
+  for (const d of found) {
+    let sc = screens.find((s) => s.auto?.key === d.key);
+    if (!sc) sc = screens.find((s) => !s.auto && s.name.toLowerCase() === d.name.toLowerCase());
+    if (!sc) {
+      sc = { ...newScreen(d.name), id: 'sc_' + d.id.replace(/[^\w-]+/g, '_').slice(0, 40) };
+      while (screens.some((s) => s.id === sc.id)) sc.id += '_';
+      screens.push(sc); added++;
+    } else updated++;
+    sc.slots = [...new Set([...sc.slots, ...d.slots])];
+    sc.auto = { key: d.key, file: d.file, kind: d.kind, dyn: d.dyn };
+  }
+  return { added, updated };
+}
+
+/** Assets of a screen counted per group: a set of images counts once ("bộ"). Groups the code picks at runtime
+ *  (e.g. any item) are listed with their whole size. */
+export function breakdown(sc, p) {
+  const g = new Map();
+  const row = (name) => g.get(name) || g.set(name, { group: name, cards: new Set(), files: 0, dyn: false, total: 0 }).get(name);
+  for (const id of sc.slots) {
+    const s = p.slotById.get(id); if (!s) continue;
+    const r = row(s.group); r.cards.add(s.set || s.id); r.files++;
+  }
+  for (const d of sc.auto?.dyn || []) {
+    const grp = d.split('/')[0], r = row(grp); r.dyn = true;
+    const cards = new Set(p.slots.filter((s) => s.group === grp).map((s) => s.set || s.id)); r.total = cards.size;
+  }
+  return [...g.values()].map((r) => ({ ...r, cards: r.cards.size })).sort((a, b) => (b.dyn - a.dyn) || b.cards - a.cards);
 }
