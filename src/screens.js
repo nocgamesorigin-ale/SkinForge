@@ -100,5 +100,5 @@ export function breakdown(sc, p) {
     const grp = d.split('/')[0], r = row(grp); r.dyn = true;
     const cards = new Set(p.slots.filter((s) => s.group === grp).map((s) => s.set || s.id)); r.total = cards.size;
   }
-  return [...g.values()].map((r) => ({ ...r, cards: r.cards.size })).sort((a, b) => (b.dyn - a.dyn) || b.cards - a.cards);
+  return [...g.values()].filter((r) => r.cards.size || r.total).map((r) => ({ ...r, cards: r.cards.size })).sort((a, b) => (b.dyn - a.dyn) || b.cards - a.cards);
 }

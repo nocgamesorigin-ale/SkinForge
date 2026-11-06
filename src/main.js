@@ -287,12 +287,13 @@ function decorate(html, c) {
 
 function screensSide(p) {
   const gd = p.kind === 'folder';
-  const items = p.screens.map((sc) => `<button class="gbtn ${app.screenSel === sc.id ? 'on' : ''}" data-act="select-screen" data-id="${sc.id}">
+  const list = gd ? p.screens : p.screens.filter((sc) => sc.slots.length || sc.shot || sc.art.text || sc.anim.text || sc.art.refs.length || sc.anim.refs.length);
+  const items = list.map((sc) => `<button class="gbtn ${app.screenSel === sc.id ? 'on' : ''}" data-act="select-screen" data-id="${sc.id}">
       <span><span>${esc(sc.name)}</span><small class="rule bd-mini">${bdMini(sc, p)}${(() => { const r = [sc.art.text || sc.art.refs.length ? 'Art' : '', sc.anim.text || sc.anim.refs.length ? 'Anim' : ''].filter(Boolean); return r.length ? ` · <b class="req-on">Yêu cầu ${r.join(' + ')}</b>` : ''; })()}</small></span>
       <span class="muted small">${sc.shot ? '<span class="has-shot" title="Có ảnh tổng thể">▣</span> ' : ''}${sc.slots.length}</span></button>`).join('');
   const unused = SC.PRESETS.filter((n) => !p.screens.some((s) => s.name === n));
   return `<span class="label">MÀN / POPUP</span>
-    ${items || `<span class="muted small side-note">${gd ? 'Nhóm asset theo nơi xuất hiện trong game để ghi yêu cầu cho Art / Anim.' : 'Game Design chưa chia asset theo màn / popup.'}</span>`}
+    ${items || `<span class="muted small side-note">${gd ? 'Nhóm asset theo nơi xuất hiện trong game để ghi yêu cầu cho Art / Anim.' : 'Brief này chưa có danh sách màn / popup (xuất trước khi có tính năng này). Nhờ Game Design xuất brief mới rồi mở lại — ảnh đã vẽ vẫn được giữ.'}</span>`}
     ${gd ? `<div class="row side-note"><button class="link small" data-act="add-screen">+ Thêm màn / popup</button>${p.root ? `<button class="link small" data-act="rescan" title="Tìm màn / popup và asset của chúng trong code game">Quét code game</button>` : ''}</div>
       ${p.unassigned?.length ? `<span class="muted small side-note">${p.unassigned.length} asset có trong code nhưng chưa rõ thuộc màn nào.</span>` : ''}
       ${unused.length && p.screens.length < 3 ? `<div class="presets">${unused.slice(0, 6).map((n) => `<button class="preset" data-act="add-preset" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}` : ''}
@@ -833,6 +834,16 @@ async function openBriefJob(file, z) {
   const brief = JSON.parse(await z['brief.json'].text());
   const id = `${brief.project}::${brief.created}`;
   let job = await F.jobGet(id);
+  // a newer brief of a project already in progress replaces that job's brief and keeps the art drawn so far
+  if (!job) {
+    const prev = (await F.jobList()).filter((j) => j.name === brief.project).sort((a, b) => (b.received || 0) - (a.received || 0))[0];
+    if (prev) {
+      const reps = brief.slots.filter((s) => s.kind !== 'anim' && (s.idx === undefined || s.idx === 0)).slice(0, 3);
+      job = { ...prev, id, briefName: file.name, received: Date.now(), total: brief.slots.length, brief: file, thumbs: reps.map((s) => z[briefPath(s)]).filter(Boolean) };
+      await F.jobPut(job); await F.jobDelete(prev.id);
+      toast(`Đã cập nhật brief mới cho ${brief.project} — giữ ${prev.reskins?.length || 0} ảnh đã vẽ`, 'ok');
+    }
+  }
   if (!job) {
     const reps = brief.slots.filter((s) => s.kind !== 'anim' && (s.idx === undefined || s.idx === 0)).slice(0, 3);
     job = { id, name: brief.project, briefName: file.name, received: Date.now(), total: brief.slots.length, brief: file,
