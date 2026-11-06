@@ -22,6 +22,7 @@ Lần đầu mở, SkinForge hỏi vai trò (nhớ trên máy, đổi được �
 |---|---|---|---|
 | **Art** | mọi ảnh còn lại | Artist (trong brief) | theo quy tắc nhóm (khung tự do / giữ tỉ lệ) |
 | **Effect** | tên/thư mục có `fx`, `vfx`, `effect`, `particle`, `anim`, `sparkle`, `splash`, `glow`, `smoke`, `shine`, `ray`… | Anim (trong brief) | như ảnh |
+| **Animation** | Spine (`.json` / `.skel` / `.atlas`), Lottie (`.json` / `.lottie`), sprite sheet (TexturePacker `.json` / `.plist`), DragonBones, Unity `.anim` / `.controller` — `.json` chỉ được nhận khi nội dung đúng là animation | Anim (trong brief, nguyên định dạng; có nút tải file gốc) | cùng định dạng và loại; **còn đủ tên animation / skin / frame / state mà game gọi**; fps, độ dài, texture; khi áp dụng thì chép nguyên file |
 | **Âm thanh** | `.mp3 .ogg .wav .m4a .aac` | Game Design (không vào brief) | cùng định dạng với file gốc; độ dài và dung lượng gần bằng; nghe thử gốc/mới; khi áp dụng thì chép nguyên file |
 
 ## Luồng làm việc

@@ -1,15 +1,19 @@
 // Project model: asset slots, groups and their rules, image sets, reskins and the checks.
 import { analyze, analyzeAudio, placement, fmtSec } from './imaging.js';
-import { ext, stem, AUDIO_EXT } from './fsx.js';
+import { ext, stem, AUDIO_EXT, ANIM_EXT } from './fsx.js';
+import { analyzeAnim, checkAnim } from './anim.js';
 
-/** Who reskins what: art + effects go to the Artist / Anim brief; sound stays with Game Design. */
+/** Who reskins what: art + effects + animation files go to the Artist / Anim brief; sound stays with Game Design. */
 export const KINDS = {
   art: { label: 'Art', owner: 'Artist' },
   fx: { label: 'Effect', owner: 'Anim' },
+  anim: { label: 'Animation', owner: 'Anim' },
   sound: { label: 'Âm thanh', owner: 'Game Design' },
 };
 const FX_RE = /(^|[\/_\-\s.])(fx|vfx|effects?|particles?|anim(ation)?s?|sparkles?|splash|glow|smoke|explosions?|shine|rays?|trail|flare)([\/_\-\s.\d]|$)/i;
-export const kindOf = (path) => AUDIO_EXT.has(ext(path)) ? 'sound' : FX_RE.test(path) ? 'fx' : 'art';
+export const kindOf = (path) => AUDIO_EXT.has(ext(path)) ? 'sound' : ANIM_EXT.has(ext(path)) ? 'anim' : FX_RE.test(path) ? 'fx' : 'art';
+/** Files copied byte-for-byte (no rendering into a frame). */
+export const isRaw = (kind) => kind === 'sound' || kind === 'anim';
 
 /*
  Slot  = one image the game uses: { id: "items/bag_1_0.webp", key: "bag_1_0", dir, ext, group, w, h, alpha, bytes, set, idx }
@@ -23,6 +27,7 @@ export const RULES = {
   free: { label: 'Khung tự do', hint: 'Dáng và kích thước món đồ tự do; ảnh được co vừa khung, không méo.' },
   fixed: { label: 'Giữ tỉ lệ khung', hint: 'Giữ tỉ lệ khung hình như ảnh gốc (sai số 2%).' },
   sound: { label: 'Âm thanh · giữ định dạng', hint: 'File mới cùng định dạng với file gốc (mp3 → mp3); độ dài nên gần bằng.' },
+  anim: { label: 'Animation · giữ tên', hint: 'Cùng định dạng và loại (Spine → Spine); giữ nguyên tên animation / skin / frame mà game gọi tới.' },
 };
 export const SAFE = { min: 0.7, max: 0.9, warnMin: 0.6, warnMax: 0.98, fill: 0.86 };
 
@@ -39,6 +44,9 @@ export async function buildSlots(entries, onProgress) {
         const base = { id: e.path, key: stem(name), name, dir: parts.join('/'), ext: ext(name), group: parts[0] || '(gốc)', bytes: e.blob.size, kind: kindOf(e.path) };
         if (base.kind === 'sound') {
           slots.push({ ...base, ...(await analyzeAudio(e.blob)) });
+        } else if (base.kind === 'anim') {
+          const a = await analyzeAnim(e.blob, name);
+          if (a) slots.push({ ...base, ...a });   // a .json that is not an animation (game data, config) is ignored
         } else {
           const a = await analyze(e.blob);
           slots.push({ ...base, w: a.w, h: a.h, alpha: a.alpha,
@@ -57,7 +65,7 @@ export async function buildSlots(entries, onProgress) {
 export function findSets(slots) {
   const buckets = new Map();
   for (const s of slots) {
-    if (s.kind === 'sound') continue;
+    if (isRaw(s.kind)) continue;
     const m = s.key.match(/^(.+)_(\d+)$/);
     if (!m) continue;
     const k = `${s.dir}/${m[1]}`;
@@ -80,10 +88,10 @@ export function findSets(slots) {
 export function defaultGroups(slots, sets) {
   const groups = {};
   for (const s of slots) {
-    const g = (groups[s.group] ||= { name: s.group, count: 0, sets: 0, rule: 'fixed', sounds: 0 });
-    g.count++; if (s.kind === 'sound') g.sounds++;
+    const g = (groups[s.group] ||= { name: s.group, count: 0, sets: 0, rule: 'fixed', sounds: 0, anims: 0 });
+    g.count++; if (s.kind === 'sound') g.sounds++; if (s.kind === 'anim') g.anims++;
   }
-  for (const g of Object.values(groups)) if (g.sounds === g.count) g.rule = 'sound';
+  for (const g of Object.values(groups)) { if (g.sounds === g.count) g.rule = 'sound'; else if (g.anims === g.count) g.rule = 'anim'; }
   const inSets = {};
   for (const set of Object.values(sets)) { groups[set.group].sets++; inSets[set.group] = (inSets[set.group] || 0) + set.members.length; }
   // "free frame" only where image sets make up most of the folder (items), not for a UI folder
@@ -95,16 +103,20 @@ export function defaultGroups(slots, sets) {
 /** Find the slot a dropped file belongs to: by relative path first, then by file name. */
 export function matcher(slots) {
   // images and sounds are looked up separately: ui/coin.webp and snd/coin.mp3 must not collide
-  const maps = { image: { byPath: new Map(), byKey: new Map() }, sound: { byPath: new Map(), byKey: new Map() } };
+  const maps = { image: { byPath: new Map(), byKey: new Map() }, sound: { byPath: new Map(), byKey: new Map() }, anim: { byPath: new Map(), byKey: new Map() } };
+  const media = (p) => AUDIO_EXT.has(ext(p)) ? 'sound' : ANIM_EXT.has(ext(p)) ? 'anim' : 'image';
+  // images/sounds match by name without extension (png → webp is fine); animation files keep their extension
+  // in the key, because hero.json and hero.atlas are two different files
+  const keyOf = (name, kind) => kind === 'anim' ? name : name.replace(/\.[^./]+$/, '');
   for (const s of slots) {
-    const m = maps[s.kind === 'sound' ? 'sound' : 'image'];
-    m.byPath.set(`${s.dir ? s.dir + '/' : ''}${s.key}`.toLowerCase(), s);
-    m.byKey.set(s.key, m.byKey.has(s.key) ? null : s);   // null = ambiguous name
+    const kind = media(s.id), m = maps[kind], k = keyOf(s.name || s.id.split('/').pop(), kind);
+    m.byPath.set(`${s.dir ? s.dir + '/' : ''}${k}`.toLowerCase(), s);
+    m.byKey.set(k, m.byKey.has(k) ? null : s);   // null = ambiguous name
   }
   return (path) => {
     const clean = path.replace(/\\/g, '/').replace(/^\/+/, '');
-    const { byPath, byKey } = maps[AUDIO_EXT.has(ext(clean)) ? 'sound' : 'image'];
-    const noExt = clean.replace(/\.[^./]+$/, '');
+    const kind = media(clean), { byPath, byKey } = maps[kind];
+    const noExt = kind === 'anim' ? clean : clean.replace(/\.[^./]+$/, '');
     const segs = noExt.split('/');
     for (let i = 0; i < segs.length; i++) {
       const hit = byPath.get(segs.slice(i).join('/').toLowerCase());
@@ -120,6 +132,7 @@ export function matcher(slots) {
 
 export async function makeReskin(blob, name) {
   if (AUDIO_EXT.has(ext(name))) return { blob, name, kind: 'sound', ...(await analyzeAudio(blob)) };
+  if (ANIM_EXT.has(ext(name))) return { blob, name, kind: 'anim', ...((await analyzeAnim(blob, name)) || {}) };
   const a = await analyze(blob);
   return { blob, name, ...a };
 }
@@ -143,9 +156,12 @@ export function checkSlot(project, slot) {
   const checks = [];
   const add = (level, title, detail) => checks.push({ level, title, detail });
   add('ok', 'Tên file khớp', `${r.name} → ${slot.id}`);
-  if (slot.kind === 'sound' || r.kind === 'sound') {
-    if (slot.kind !== r.kind) add('error', 'Sai loại file', slot.kind === 'sound' ? 'Ô này là âm thanh, file nhập vào là ảnh' : 'Ô này là ảnh, file nhập vào là âm thanh');
-    else checkSound(slot, r, add);
+  if (isRaw(slot.kind) || isRaw(r.kind)) {
+    const word = { sound: 'âm thanh', anim: 'file animation', image: 'ảnh' };
+    const sk = isRaw(slot.kind) ? slot.kind : 'image', rk = r.kind || 'image';
+    if (sk !== rk) add('error', 'Sai loại file', `Ô này là ${word[sk]}, file nhập vào là ${word[rk]}`);
+    else if (slot.kind === 'sound') checkSound(slot, r, add);
+    else checkAnim(slot, r, add);
     const st = checks.some((c) => c.level === 'error') ? 'error' : checks.some((c) => c.level === 'warn') ? 'warn' : 'ok';
     r.checks = checks; r.status = st;
     return st;

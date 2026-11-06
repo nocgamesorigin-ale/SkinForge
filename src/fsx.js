@@ -6,7 +6,9 @@ export const fsSupported = 'showDirectoryPicker' in window;
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.reskin', '.falcon', '.falcon-publish', 'Library', 'Temp', 'Logs', 'obj', 'build', '.idea', '.vscode']);
 export const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp']);
 export const AUDIO_EXT = new Set(['mp3', 'ogg', 'wav', 'm4a', 'aac']);
-export const ASSET_EXT = new Set([...IMAGE_EXT, ...AUDIO_EXT]);
+// animation data; .json/.plist are kept only when their content is an animation (checked in project.js)
+export const ANIM_EXT = new Set(['json', 'atlas', 'skel', 'plist', 'anim', 'controller', 'lottie']);
+export const ASSET_EXT = new Set([...IMAGE_EXT, ...AUDIO_EXT, ...ANIM_EXT]);
 
 export const ext = (name) => (name.match(/\.([^.]+)$/)?.[1] || '').toLowerCase();
 export const stem = (name) => name.replace(/\.[^.]+$/, '');

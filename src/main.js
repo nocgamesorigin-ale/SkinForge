@@ -1,7 +1,8 @@
 import './style.css';
 import * as F from './fsx.js';
 import { render, toPNG, fmtBytes, fmtSec } from './imaging.js';
-import { RULES, SAFE, KINDS, kindOf, buildSlots, findSets, defaultGroups, matcher, makeReskin, checkAll, autoFit, summary } from './project.js';
+import { animTypeLabel } from './anim.js';
+import { RULES, SAFE, KINDS, kindOf, isRaw, buildSlots, findSets, defaultGroups, matcher, makeReskin, checkAll, autoFit, summary } from './project.js';
 import { makeZip, readZip, download } from './zipx.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -76,13 +77,13 @@ function modePickerView() {
       <button class="role gd" data-act="pick-mode" data-mode="gd">
         <span class="role-top"><span class="role-ic">${ICON.folder}</span><span class="pill">Cần Chrome / Edge</span></span>
         <b>Game Design</b><span class="muted">Người giữ thư mục dự án game.</span>
-        <ul>${item('Thêm thư mục dự án, quét toàn bộ asset')}${item('Xuất brief art + effect cho Artist / Anim')}${item('Thay âm thanh (sound) của game')}${item('Nhận gói reskin, kiểm tra, áp dụng vào game')}${item('Sao lưu, hoàn tác, báo cáo dung lượng')}</ul>
+        <ul>${item('Thêm thư mục dự án, quét toàn bộ asset')}${item('Xuất brief art, effect, animation cho Artist / Anim')}${item('Thay âm thanh (sound) của game')}${item('Nhận gói reskin, kiểm tra, áp dụng vào game')}${item('Sao lưu, hoàn tác, báo cáo dung lượng')}</ul>
         <span class="role-cta">Vào chế độ Game Design</span>
       </button>
       <button class="role artist" data-act="pick-mode" data-mode="artist">
         <span class="role-top"><span class="role-ic">${MODE_ICON.artist}</span><span class="pill gray">Mọi trình duyệt</span></span>
         <b>Artist / Anim</b><span class="muted">Người vẽ lại art và làm lại effect theo gói brief.</span>
-        <ul>${item('Mở gói brief / reskin được gửi')}${item('Chọn project đang làm để tiếp tục')}${item('Art cho Artist, Effect (khói, bọt, tia sáng…) cho Anim')}${item('Kéo thả file đã làm, tự kiểm tra lỗi')}${item('Xuất gói reskin gửi lại Game Design')}</ul>
+        <ul>${item('Mở gói brief / reskin được gửi')}${item('Chọn project đang làm để tiếp tục')}${item('Art cho Artist; Effect và file animation (Spine, Lottie, sprite sheet…) cho Anim')}${item('Kéo thả file đã làm, tự kiểm tra lỗi')}${item('Xuất gói reskin gửi lại Game Design')}</ul>
         <span class="role-cta">Vào chế độ Artist / Anim</span>
       </button>
     </div>
@@ -180,6 +181,7 @@ function homeArtistView() {
       <div><b>PNG nền trong suốt</b><span>Cho đồ vật, icon, nút.</span></div>
       <div><b>Đồ vật: dáng tự do</b><span>Nhưng các ảnh trong một bộ phải khớp nhau.</span></div>
       <div><b>Nút, banner, nền</b><span>Giữ tỉ lệ khung như ảnh gốc.</span></div>
+      <div><b>File animation</b><span>Tải file gốc, sửa, xuất đúng định dạng; giữ tên animation / skin / frame.</span></div>
     </section>
   </main>`;
 }
@@ -208,10 +210,58 @@ function cardsOf(p) {
 function cardNote(p, c) {
   const errs = c.slots.flatMap((s) => (p.reskins.get(s.id)?.checks || []).filter((k) => k.level === 'error' || k.level === 'warn').map((k) => k.title));
   if (c.status === 'missing') return c.type === 'set' ? `Cần ${c.slots.length} ảnh: ${c.slots[0].key} … ${c.slots.at(-1).key}` : `Cần ${c.slots[0].name}`;
-  return errs[0] ? errs[0] + (errs.length > 1 ? ` (+${errs.length - 1})` : '') : c.slots[0].kind === 'sound' ? 'Âm thanh đạt' : `${c.slots.length}/${c.slots.length} ảnh đạt`;
+  return errs[0] ? errs[0] + (errs.length > 1 ? ` (+${errs.length - 1})` : '') : c.slots[0].kind === 'sound' ? 'Âm thanh đạt' : c.slots[0].kind === 'anim' ? 'Animation đạt' : `${c.slots.length}/${c.slots.length} ảnh đạt`;
 }
 
-const KIND_ICON = { art: '<i class="kdot art"></i>', fx: '<i class="kdot fx"></i>', sound: '<i class="kdot sound"></i>' };
+const KIND_ICON = { art: '<i class="kdot art"></i>', fx: '<i class="kdot fx"></i>', anim: '<i class="kdot anim"></i>', sound: '<i class="kdot sound"></i>' };
+const ANIM_ACCEPT = '.json,.atlas,.skel,.plist,.anim,.controller,.lottie';
+
+const namesLine = (x) => x?.names?.length ? `${x.names.length} ${x.label || 'tên'}: ${x.names.slice(0, 6).join(', ')}${x.names.length > 6 ? ' …' : ''}` : '';
+function animMeta(x) {
+  return [animTypeLabel(x.animType), x.fps ? `${x.fps} fps` : '', x.duration ? `${x.duration}s` : '', x.bones ? `${x.bones} xương` : '',
+    x.skins?.length ? `${x.skins.length} skin` : '', x.w ? `${x.w}×${x.h}` : ''].filter(Boolean).join(' · ');
+}
+
+function animCard(p, c) {
+  const s = c.slots[0], r = p.reskins.get(s.id);
+  return `<div class="card anim ${STATUS[c.status].cls}">
+    <div class="card-h"><div><b class="mono">${esc(s.name)}</b><span class="muted small">${esc(s.dir || '(gốc)')} · ${fmtBytes(s.bytes)}</span></div>
+      <span class="badge ${STATUS[c.status].cls}">${STATUS[c.status].label}</span></div>
+    <div class="anim-box"><small>GỐC</small><b>${esc(animMeta(s))}</b><span>${esc(namesLine(s)) || '—'}</span></div>
+    <div class="anim-box ${r ? '' : 'empty'}"><small>MỚI</small>${r ? `<b>${esc(r.animType ? animMeta(r) : 'Không nhận ra định dạng')}</b><span>${esc(namesLine(r)) || '—'}</span>`
+      : `<label class="snd-drop">${ICON.upload} Chọn file .${s.ext}<input type="file" accept="${ANIM_ACCEPT}" data-act="pick-one" data-id="${esc(s.id)}" hidden></label>`}</div>
+    <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${kindBadge('anim')}
+      <button class="link small" data-act="dl-original" data-id="${esc(s.id)}">Tải file gốc</button>
+      <button class="link small" data-act="detail" data-id="${esc(c.id)}">Chi tiết</button></div>
+  </div>`;
+}
+
+function animDetailView(p, s) {
+  const r = p.reskins.get(s.id);
+  const order = { error: 0, warn: 1, info: 2, ok: 3 };
+  const chk = (r?.checks || []).slice().sort((a, b) => order[a.level] - order[b.level]);
+  const chips = (names) => (names || []).slice(0, 40).map((n) => `<code class="chip">${esc(n)}</code>`).join('') + ((names || []).length > 40 ? `<span class="muted small"> +${names.length - 40}</span>` : '');
+  return `<div class="modal" role="dialog" aria-modal="true" aria-label="Animation ${esc(s.name)}">
+    <div class="sheet">
+      <header class="sheet-h"><div><b class="mono">${esc(s.name)}</b> <span class="muted">${esc(s.dir || '(gốc)')}</span> ${kindBadge('anim')}</div>
+        <button class="iconbtn" data-act="close-detail" aria-label="Đóng">${ICON.close}</button></header>
+      <div class="sheet-b">
+        <div class="snd-big"><small>GỐC · ${esc(animMeta(s))}</small><div class="chips">${chips(s.names) || '<span class="muted small">Không có tên cần giữ</span>'}</div>
+          ${s.textures?.length ? `<span class="muted small">Texture: ${esc(s.textures.join(', '))}</span>` : ''}
+          <div class="row"><button class="btn" data-act="dl-original" data-id="${esc(s.id)}">Tải file gốc để sửa</button></div></div>
+        <div class="snd-big"><small>MỚI${r ? ` · ${esc(r.animType ? animMeta(r) : 'không nhận ra định dạng')} · ${fmtBytes(r.blob.size)}` : ''}</small>
+          ${r ? `<div class="chips">${chips(r.names)}</div>` : `<label class="btn">Chọn file .${s.ext}<input type="file" accept="${ANIM_ACCEPT}" data-act="pick-one" data-id="${esc(s.id)}" hidden></label>`}</div>
+        <div class="panel"><b>Kiểm tra tự động</b>
+          ${chk.length ? chk.map((k) => `<div class="chk ${k.level}"><i aria-hidden="true">${{ ok: '✓', info: 'i', warn: '!', error: '✗' }[k.level]}</i><div><b>${esc(k.title)}</b><span>${esc(k.detail)}</span></div></div>`).join('') : '<span class="muted small">Chưa có file mới cho animation này.</span>'}
+        </div>
+        <div class="panel"><b>Yêu cầu</b><dl><dt>Tên file</dt><dd class="mono">${esc(s.name)}</dd><dt>Định dạng</dt><dd>${esc(animTypeLabel(s.animType))} · .${s.ext}</dd>
+          ${s.names?.length ? `<dt>Giữ tên</dt><dd>${s.names.length} ${esc(s.label || 'tên')} như danh sách trên</dd>` : ''}
+          ${s.fps ? `<dt>fps</dt><dd>${s.fps}</dd>` : ''}<dt>Xuất vào game</dt><dd>Chép nguyên file, không chuyển đổi</dd></dl></div>
+        ${r ? `<button class="btn danger" data-act="remove-reskin" data-id="${esc(s.id)}" data-type="slot">Xoá file mới</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
 const kindBadge = (k) => `<span class="kind ${k}">${KINDS[k].label}</span>`;
 
 function soundCard(p, c) {
@@ -236,9 +286,9 @@ function workspaceView() {
     <div class="ptitle"><div><b>${esc(p.name)}</b><span class="pill">${esc(p.engine)}</span></div><code>${esc(p.kind === 'brief' ? p.briefName : (p.root.name + (p.assetRoot ? '/' + p.assetRoot : '')))}</code></div>
     <div class="row right">
       ${p.kind === 'folder' ? `<button class="btn" data-act="export-brief" title="Art và effect — âm thanh không nằm trong brief">Xuất brief cho Artist / Anim</button>
-        <label class="btn">Nhập reskin / âm thanh<input type="file" accept=".zip,image/*,audio/*" multiple data-act="import-files" hidden></label>
+        <label class="btn">Nhập reskin / âm thanh<input type="file" accept=".zip,image/*,audio/*,${ANIM_ACCEPT}" multiple data-act="import-files" hidden></label>
         <button class="btn primary" data-act="open-apply" ${readyCount ? '' : 'disabled'}>Áp dụng vào game (${readyCount})</button>`
-      : `<label class="btn">Chọn ảnh<input type="file" accept="image/*" multiple data-act="import-files" hidden></label>
+      : `<label class="btn">Chọn file<input type="file" accept="image/*,${ANIM_ACCEPT}" multiple data-act="import-files" hidden></label>
         <button class="btn primary" data-act="export-reskin" ${p.reskins.size ? '' : 'disabled'}>Xuất gói reskin (${p.reskins.size})</button>`}
     </div>`;
   return `${header(extra)}
@@ -256,9 +306,9 @@ function workspaceView() {
       <button class="gbtn ${!app.group ? 'on' : ''}" data-act="group" data-g=""><span>Tất cả</span><span class="muted small">${p.slots.length}</span></button>
       ${groups.map((g) => `<div class="gitem ${app.group === g.name ? 'on' : ''}">
         <button class="gbtn" data-act="group" data-g="${esc(g.name)}"><span><span>${esc(g.name)}</span><small class="rule ${g.rule}">${RULES[g.rule].label}${g.sets ? ` · ${g.sets} bộ` : ''}</small></span><span class="muted small">${g.count}</span></button>
-        ${p.kind === 'folder' && g.rule !== 'sound' ? `<button class="link small" data-act="toggle-rule" data-g="${esc(g.name)}">Đổi thành “${RULES[g.rule === 'free' ? 'fixed' : 'free'].label}”</button>` : ''}
+        ${p.kind === 'folder' && (g.rule === 'free' || g.rule === 'fixed') ? `<button class="link small" data-act="toggle-rule" data-g="${esc(g.name)}">Đổi thành “${RULES[g.rule === 'free' ? 'fixed' : 'free'].label}”</button>` : ''}
       </div>`).join('')}
-      <div class="hintbox"><b>Ai làm gì</b><br>${KIND_ICON.art}<b>Art</b> và ${KIND_ICON.fx}<b>Effect</b>: Artist / Anim (nằm trong brief).${p.kind === 'folder' ? `<br>${KIND_ICON.sound}<b>Âm thanh</b>: Game Design tự thay trong workspace này.` : ''}
+      <div class="hintbox"><b>Ai làm gì</b><br>${KIND_ICON.art}<b>Art</b>: Artist · ${KIND_ICON.fx}<b>Effect</b> và ${KIND_ICON.anim}<b>Animation</b>: Anim (cùng nằm trong brief).${p.kind === 'folder' ? `<br>${KIND_ICON.sound}<b>Âm thanh</b>: Game Design tự thay trong workspace này.` : ''}
         <br><br><b>Quy tắc</b><br><b>Khung tự do:</b> ${RULES.free.hint} Ảnh trong một bộ phải khớp nhau, không cần khớp ảnh gốc.<br><b>Giữ tỉ lệ khung:</b> ${RULES.fixed.hint}${p.kind === 'folder' ? `<br><b>Âm thanh:</b> ${RULES.sound.hint}` : ''}</div>
     </aside>
     <main class="main">
@@ -279,6 +329,7 @@ function workspaceView() {
         ${cards.slice(0, app.limit || 120).map((c) => {
           const s = rep(c), r = p.reskins.get(s.id);
           if (s.kind === 'sound') return soundCard(p, c);
+          if (s.kind === 'anim') return animCard(p, c);
           return `<button class="card ${STATUS[c.status].cls}" data-act="detail" data-id="${esc(c.id)}">
             <div class="card-h"><div><b class="mono">${esc(c.type === 'set' ? c.set.name : s.key)}</b><span class="muted small">${esc(s.dir || '(gốc)')} · ${s.w}×${s.h}${c.type === 'set' ? ` · bộ ${c.slots.length} ảnh` : ''}</span></div><span class="badge ${STATUS[c.status].cls}">${STATUS[c.status].label}</span></div>
             <div class="pair">
@@ -326,6 +377,7 @@ function soundDetailView(p, s) {
 function detailView() {
   const p = app.project, d = app.detail;
   if (d.type === 'slot' && p.slotById.get(d.id)?.kind === 'sound') return soundDetailView(p, p.slotById.get(d.id));
+  if (d.type === 'slot' && p.slotById.get(d.id)?.kind === 'anim') return animDetailView(p, p.slotById.get(d.id));
   const slots = d.type === 'set' ? p.sets[d.id].members.map((id) => p.slotById.get(id)) : [p.slotById.get(d.id)];
   const s0 = slots[0], rule = p.groups[s0.group].rule;
   const fitKey = s0.set || s0.id, fit = p.fits[fitKey];
@@ -481,7 +533,7 @@ async function refreshPreviews(p, ids) {
     const s = p.slotById.get(id), r = p.reskins.get(id);
     if (!s || !r) continue;
     if (r.preview) URL.revokeObjectURL(r.preview);
-    if (s.kind === 'sound' || r.kind === 'sound') { r.preview = URL.createObjectURL(r.blob); continue; }   // played as-is
+    if (isRaw(s.kind) || isRaw(r.kind)) { r.preview = URL.createObjectURL(r.blob); continue; }   // sound / animation: used as-is
     const fit = p.fits[s.set || s.id] || null;
     r.preview = URL.createObjectURL(await render(r.blob, r, s.w, s.h, fit, 'png', 320));
     if (ids.length > 8) busy('Đang tạo xem trước…', ++i, ids.length);
@@ -563,20 +615,25 @@ async function exportBrief() {
   const files = {};
   // the brief is for Artist / Anim: art + effects only — sound stays with Game Design
   const slots = p.slots.filter((s) => s.kind !== 'sound');
-  const nFx = slots.filter((s) => s.kind === 'fx').length;
+  const nFx = slots.filter((s) => s.kind === 'fx').length, nAnim = slots.filter((s) => s.kind === 'anim').length;
   let i = 0;
   busy('Đang tạo gói brief…', 0, slots.length);
   for (const s of slots) {
-    files[`originals/${s.dir ? s.dir + '/' : ''}${s.key}.png`] = await toPNG(p.files.get(s.id), s.name);
+    // images become PNG for the artist; animation files ship as-is so Anim can open and edit them
+    files[briefPath(s)] = s.kind === 'anim' ? p.files.get(s.id) : await toPNG(p.files.get(s.id), s.name);
     busy('Đang tạo gói brief…', ++i, slots.length);
   }
   const groups = Object.values(p.groups).filter((g) => g.rule !== 'sound');
   const brief = { tool: 'SkinForge', kind: 'brief', version: 2, project: p.name, engine: p.engine, created: new Date().toISOString(),
     groups: Object.fromEntries(groups.map((g) => [g.name, { rule: g.rule }])),
-    slots: slots.map(({ id, key, name, dir, ext, group, kind, w, h, alpha, bytes, fill, set, idx }) => ({ id, key, name, dir, ext, group, kind, w, h, alpha, bytes, fill, set, idx })) };
+    slots: slots.map(({ id, key, name, dir, ext, group, kind, w, h, alpha, bytes, fill, set, idx,
+      animType, names, skins, fps, duration, frames, textures, label, bones, version, tags }) =>
+      ({ id, key, name, dir, ext, group, kind, w, h, alpha, bytes, fill, set, idx,
+        ...(kind === 'anim' ? { animType, names, skins, fps, duration, frames, textures, label, bones, version, tags } : {}) })) };
   files['brief.json'] = JSON.stringify(brief, null, 2);
   files['HUONG-DAN.txt'] = [
-    `Gói brief reskin: ${p.name} (${slots.length} ảnh: ${slots.length - nFx} art, ${nFx} effect)`, '',
+    `Gói brief reskin: ${p.name} (${slots.length - nFx - nAnim} art, ${nFx} effect, ${nAnim} file animation)`, '',
+    ...(nAnim ? ['File animation (Spine / Lottie / sprite sheet / Unity…) nằm nguyên định dạng trong originals/: sửa rồi xuất đúng định dạng đó, GIỮ NGUYÊN TÊN animation / skin / frame mà game gọi tới.', ''] : []),
     'Art: Artist vẽ lại. Effect (hiệu ứng: khói, bọt, tia sáng, lấp lánh…): Anim làm lại. Mở trên trang để lọc theo Art / Effect.', '',
     'Cách làm:',
     '1. Mở https://nocgamesorigin-ale.github.io/SkinForge/ → "Mở gói" → chọn file zip này để xem từng ô, yêu cầu và tự kiểm tra.',
@@ -591,9 +648,12 @@ async function exportBrief() {
   busy();
   download(zip, `${slug(p.name)}_brief.zip`);
   toast(`Đã xuất gói brief (${fmtBytes(zip.size)})`, 'ok');
-  const text = `${p.name} — xuất brief ${slots.length} ảnh (${slots.length - nFx} art, ${nFx} effect · ${fmtBytes(zip.size)})`;
+  const text = `${p.name} — xuất brief ${slots.length} asset (${slots.length - nFx - nAnim} art, ${nFx} effect, ${nAnim} animation · ${fmtBytes(zip.size)})`;
   await touchRecent({ briefAt: Date.now(), activity: text }); F.logActivity(text, 'warn');
 }
+
+/** Where a slot's original sits inside a brief zip. */
+const briefPath = (s) => `originals/${s.dir ? s.dir + '/' : ''}${s.key}.${s.kind === 'anim' ? s.ext : 'png'}`;
 
 /* ---------------- Artist jobs: a brief pack plus the artist's work, kept in this browser ---------------- */
 function setMode(mode, remember = true) {
@@ -607,9 +667,9 @@ async function openBriefJob(file, z) {
   const id = `${brief.project}::${brief.created}`;
   let job = await F.jobGet(id);
   if (!job) {
-    const reps = brief.slots.filter((s) => s.idx === undefined || s.idx === 0).slice(0, 3);
+    const reps = brief.slots.filter((s) => s.kind !== 'anim' && (s.idx === undefined || s.idx === 0)).slice(0, 3);
     job = { id, name: brief.project, briefName: file.name, received: Date.now(), total: brief.slots.length, brief: file,
-      thumbs: reps.map((s) => z[`originals/${s.dir ? s.dir + '/' : ''}${s.key}.png`]).filter(Boolean), reskins: [], fits: {}, done: 0, errors: 0 };
+      thumbs: reps.map((s) => z[briefPath(s)]).filter(Boolean), reskins: [], fits: {}, done: 0, errors: 0 };
     await F.jobPut(job);
   }
   await loadJob(job, z);
@@ -620,7 +680,7 @@ async function loadJob(job, z) {
   z ||= await readZip(job.brief);
   const brief = JSON.parse(await z['brief.json'].text());
   const files = new Map();
-  for (const s of brief.slots) files.set(s.id, z[`originals/${s.dir ? s.dir + '/' : ''}${s.key}.png`]);
+  for (const s of brief.slots) files.set(s.id, z[briefPath(s)]);
   const p = newProject({ kind: 'brief', name: brief.project, engine: brief.engine, briefName: job.briefName, jobId: job.id,
     slots: brief.slots.filter((s) => s.kind !== 'sound').map((s) => ({ ...s, kind: s.kind || kindOf(s.id), set: undefined, idx: undefined })), files });
   for (const [g, v] of Object.entries(brief.groups || {})) if (p.groups[g]) p.groups[g].rule = v.rule;
@@ -697,7 +757,7 @@ async function openApply() {
     busy('Đang chuẩn bị ảnh xuất…', ++i, ids.length);
     if (r.status === 'error') { skip++; continue; }
     // sound is copied as-is (its format was checked); images are rendered into the original frame and format
-    const out = s.kind === 'sound' ? r.blob : await render(r.blob, r, s.w, s.h, p.fits[s.set || s.id] || null, s.ext);
+    const out = isRaw(s.kind) ? r.blob : await render(r.blob, r, s.w, s.h, p.fits[s.set || s.id] || null, s.ext);
     ok.push({ s, out });
     const g = (rows[s.group] ||= { group: s.group, n: 0, before: 0, after: 0 });
     g.n++; g.before += s.bytes; g.after += out.size; before += s.bytes; after += out.size;
@@ -787,6 +847,7 @@ document.addEventListener('click', async (e) => {
   if (act === 'group') { app.group = el.dataset.g || null; draw(); }
   if (act === 'filter') { app.filter = el.dataset.f; draw(); }
   if (act === 'kind') { app.kind = el.dataset.k; draw(); }
+  if (act === 'dl-original') { const s = p.slotById.get(el.dataset.id); const b = p.files.get(s.id); if (b) download(b, s.name); }
   if (act === 'more') { app.limit = (app.limit || 120) + 120; draw(); }
   if (act === 'toggle-rule') { const g = p.groups[el.dataset.g]; g.rule = g.rule === 'free' ? 'fixed' : 'free'; checkAll(p); await saveMeta(); draw(); }
   if (act === 'detail') { const c = el.dataset.id; app.detail = { type: p.sets[c] ? 'set' : 'slot', id: c }; draw(); }
