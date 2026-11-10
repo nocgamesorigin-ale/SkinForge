@@ -12,6 +12,7 @@ import { ext, stem } from './fsx.js';
 const YAML_EXT = new Set(['prefab', 'unity', 'asset', 'mat', 'controller', 'overridecontroller', 'anim', 'spriteatlas', 'playable', 'mask', 'mixer', 'physicsmaterial2d', 'guiskin', 'fontsettings', 'renderTexture']);
 const SKIP = new Set(['Library', 'Temp', 'Logs', 'obj', 'Packages', 'UserSettings', 'Build', 'Builds']);
 const POPUP_WORD = /(panel|popup|pop|modal|dialog|window|sheet|overlay|toast)$/i;
+const POPUP_START = /^(?:[Pp]opup|[Pp]anel|[Dd]ialog|[Mm]odal)(?=[A-Z0-9_\-\s])[_\-\s]?/;   // PopupWin, Panel_Shop (not Popular…)
 const PANEL_NAME = /(panel|popup|screen|dialog|window|view|menu|shop|hud|page)/i;
 const LEVEL_DIR = /(^|\/)(levels?|stages?|maps?|rounds?|puzzles?)(\/|$)/i;
 const ROOM_DIR = /(^|\/)(rooms?|chapters?|worlds?|areas?|zones?|houses?|floors?)(\/|$)/i;
@@ -123,7 +124,7 @@ export async function detectUnity(root, slots, assetRoot = 'Assets', onProgress)
       const kind = ROOM_DIR.test(dir) || /^(room|chapter)/i.test(nm) ? 'room' : 'level';
       roots.push({ path: f.path, kind, id: +num[1], suffix: num[2] || '', name: nm });
     } else if (e === 'unity') roots.push({ path: f.path, kind: 'screen', name: nm });
-    else if (PANEL_NAME.test(nm)) roots.push({ path: f.path, kind: POPUP_WORD.test(nm) ? 'popup' : 'screen', name: nm });
+    else if (PANEL_NAME.test(nm)) roots.push({ path: f.path, kind: POPUP_WORD.test(nm) || POPUP_START.test(nm) ? 'popup' : 'screen', name: nm.replace(POPUP_START, '') || nm });
   }
   if (!roots.length) return { topics: [] };
   const rootSet = new Set(roots.map((r) => r.path));

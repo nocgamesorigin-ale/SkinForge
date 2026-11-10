@@ -91,9 +91,14 @@ export function mergeDetected(screens, found) {
       sc = { ...newScreen(d.name), id: 'sc_' + d.id.replace(/[^\w-]+/g, '_').slice(0, 40) };
       while (screens.some((s) => s.id === sc.id)) sc.id += '_';
       screens.push(sc); added++;
-    } else updated++;
+    } else {
+      updated++;
+      // follow a better detected name unless Game Design renamed the topic ("Màn Popup Win" → "Popup Win")
+      const was = sc.auto?.name ?? (sc.auto && sc.name.toLowerCase() === ('màn ' + d.name).toLowerCase() ? sc.name : null);
+      if (was && sc.name === was) sc.name = d.name;
+    }
     sc.slots = [...new Set([...sc.slots, ...d.slots])];
-    sc.auto = { key: d.key, file: d.file, kind: d.kind, dyn: d.dyn };
+    sc.auto = { key: d.key, file: d.file, kind: d.kind, dyn: d.dyn, name: d.name };
   }
   return { added, updated };
 }

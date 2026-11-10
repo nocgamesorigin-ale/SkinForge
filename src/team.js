@@ -37,6 +37,32 @@ export async function readInbox(base, who) {
   return (await F.walkImages(dir)).map((f) => ({ path: f.path, blob: f.file }));
 }
 
+/* ---------- live previews: each person's work in progress, small, so the team and Game Design can see it ---------- */
+const previewPath = (base, name, slotId) => `${base.pre}preview/${slug(name)}/${slotId}.webp`;
+
+/** Shrink a drawn image to a small WebP (max 320 px) for the shared preview. */
+export async function thumb(blob, max = 320) {
+  const bmp = await createImageBitmap(blob);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height); bmp.close?.();
+  return new Promise((res) => c.toBlob((b) => res(b), 'image/webp', 0.82));
+}
+export const writePreview = (base, name, slotId, blob) => F.writeFile(base.handle, previewPath(base, name, slotId), blob);
+export async function readPreview(base, name, slotId) {
+  try { return await F.getFile(base.handle, previewPath(base, name, slotId)); } catch { return null; }
+}
+
+/** slot id → [{ name, h, preview }] for everyone except `me`: who has drawn this image (h changes when they redraw it). */
+export function othersBySlot(team, me) {
+  const out = new Map();
+  for (const m of team) {
+    if (me && slug(m.name) === slug(me)) continue;
+    for (const [id, h] of Object.entries(m.drawn || {})) (out.get(id) || out.set(id, []).get(id)).push({ name: m.name, h, preview: !!m.previews?.[id] });
+  }
+  return out;
+}
+
 /** Per-topic numbers for the board: total cards (no sound), drawn by the people on it, handed in, received by Game Design. */
 export function topicProgress(sc, p, team, received) {
   const cards = new Map();   // card id → slot ids

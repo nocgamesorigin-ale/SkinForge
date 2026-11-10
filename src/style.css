@@ -343,3 +343,30 @@ body.dragging .dropveil { display: flex; }
   .top { padding: 10px 16px; } .home, .main { padding-left: 16px; padding-right: 16px; } .side { max-width: none; border-right: 0; border-bottom: 1px solid var(--line); }
   .safe { display: none; } .modal { padding: 0; } .sheet { max-height: 100vh; border-radius: 0; }
 }
+
+/* teammates' work: chip on a card, their preview where I have nothing yet, a row per teammate in the detail */
+.peer { font-size: 11px; padding: 2px 7px; border-radius: 999px; white-space: nowrap; background: color-mix(in srgb, #8B5CF6 16%, transparent); border: 1px solid color-mix(in srgb, #8B5CF6 45%, transparent); color: var(--ink); }
+.peerbox { position: relative; }
+.peerbox img { opacity: .9; }
+.peerbox.nopic img { display: none; }
+.peer-tag { position: absolute; left: 6px; bottom: 6px; font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #8B5CF6; color: #fff; }
+.cell.empty-peer { display: grid; place-items: center; border: 1px dashed var(--line); border-radius: 8px; }
+
+/* GitLab */
+.glbox { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; padding: 12px; border-radius: 12px; border: 1px dashed var(--line); }
+.glbox.on { border-style: solid; border-color: color-mix(in srgb, #FC6D26 50%, transparent); background: color-mix(in srgb, #FC6D26 6%, transparent); }
+.glbox .block { flex-basis: 100%; }
+.form { display: flex; flex-direction: column; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field > span { font-weight: 600; font-size: 13px; }
+.field input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; }
+/* a single image in the detail should not fill the whole screen: one row of each version stays in view */
+.dgrid .cell { max-height: 34vh; }
+.dgrid .cell img { width: 100%; height: 100%; object-fit: contain; }
+
+.glform { display: grid; grid-template-columns: 130px 1fr; gap: 10px 12px; align-items: start; width: 100%; margin-top: 4px; }
+.gl-l { font-weight: 600; font-size: 13px; padding-top: 6px; }
+.gl-v { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.glform select, .glform input:not([type=checkbox]) { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
+.glform .gl-name { min-width: 220px; } .glform .gl-msg { width: 100%; }
+.seg.small button { padding: 4px 10px; font-size: 12px; }

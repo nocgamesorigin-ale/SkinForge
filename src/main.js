@@ -5,6 +5,7 @@ import { animTypeLabel } from './anim.js';
 import * as SC from './screens.js';
 import { detectScreens } from './detect.js';
 import * as T from './team.js';
+import * as GL from './gitlab.js';
 import { RULES, SAFE, KINDS, kindOf, isRaw, buildSlots, findSets, defaultGroups, matcher, makeReskin, checkAll, autoFit, summary } from './project.js';
 import { makeZip, readZip, download } from './zipx.js';
 
@@ -38,8 +39,37 @@ function draw() {
   root.innerHTML = app.screen !== 'home' ? workspaceView() : !app.mode ? modePickerView() : app.mode === 'gd' ? homeGDView() : homeArtistView();
   if (app.detail) root.insertAdjacentHTML('beforeend', detailView());
   if (app.apply) root.insertAdjacentHTML('beforeend', applyView());
+  if (app.gl) root.insertAdjacentHTML('beforeend', glSetupView());
+  if (app.glDone) root.insertAdjacentHTML('beforeend', glDoneView());
   if (app.crop) root.insertAdjacentHTML('beforeend', cropView());
   if (app.lightbox) root.insertAdjacentHTML('beforeend', `<div class="modal lightbox" data-act="close-lightbox" role="dialog" aria-modal="true" aria-label="Ảnh ref"><img src="${app.lightbox}" alt="Ảnh ref"><button class="iconbtn" data-act="close-lightbox" aria-label="Đóng">${ICON.close}</button></div>`);
+  hydratePeers();
+}
+
+/* ---------- what the rest of the team has drawn (shared folder): chips + small previews ---------- */
+const peerUrls = new Map();   // "name|slot|hash" → Promise<url|''>
+/** slot id → [{ name, h, preview }]: everyone else for an artist, everyone for Game Design. */
+function othersOf(p) {
+  const key = `${p.team?.sig || ''}|${app.me}|${p.kind}`;
+  if (app._othersKey !== key) { app._othersKey = key; app._others = T.othersBySlot(p.team?.list || [], p.kind === 'folder' ? null : app.me); }
+  return app._others;
+}
+function peersOfCard(p, c) {
+  const o = othersOf(p), names = new Map();
+  for (const s of c.slots) for (const x of o.get(s.id) || []) names.set(x.name, (names.get(x.name) || 0) + 1);
+  return [...names].map(([name, n]) => ({ name, n }));
+}
+const peerChips = (p, c) => peersOfCard(p, c).map(({ name, n }) => `<span class="peer" title="${esc(name)} đã vẽ ${n}/${c.slots.length} ảnh của ô này">✎ ${esc(name)}</span>`).join('');
+/** <img> filled in after render from <shared>/.reskin/preview/<name>/<slot>.webp */
+const peerImg = (x, slotId) => `<img data-peer="${esc(x.name)}" data-slot="${esc(slotId)}" data-h="${esc(x.h)}" alt="Bản của ${esc(x.name)}">`;
+async function hydratePeers() {
+  const p = app.project, base = p && teamBase(p); if (!base) return;
+  for (const img of document.querySelectorAll('img[data-peer]:not([src])')) {
+    const k = `${img.dataset.peer}|${img.dataset.slot}|${img.dataset.h}`;
+    if (!peerUrls.has(k)) peerUrls.set(k, T.readPreview(base, img.dataset.peer, img.dataset.slot).then((b) => (b ? URL.createObjectURL(b) : '')));
+    const u = await peerUrls.get(k);
+    if (u) img.src = u; else img.closest('.peerbox')?.classList.add('nopic');
+  }
 }
 function toast(msg, kind = '') {
   const t = document.createElement('div'); t.className = `toast ${kind}`; t.textContent = msg; document.body.appendChild(t);
@@ -453,6 +483,7 @@ function boardView(p) {
     <div class="people">${team.length ? team.map((m) => {
       const topics = p.screens.filter((sc) => sc.owner === m.name || (m.claims || []).includes(sc.id));
       return `<div class="person-card ${m.name === app.me ? 'me' : ''}"><b>${esc(m.name)}</b><span class="muted small">${esc(m.role || '')} · cập nhật ${ago(m.updated)}</span>
+        ${m.viewing ? `<span class="small">Đang mở: <b>${esc(m.viewing)}</b></span>` : ''}
         <span class="small">${topics.length} phần: ${topics.slice(0, 4).map((sc) => esc(sc.name)).join(', ')}${topics.length > 4 ? '…' : ''}</span>
         <span class="small">Đã vẽ <b>${m.done || 0}</b> ảnh · đã nộp <b>${Object.keys(m.handed || {}).length}</b></span></div>`; }).join('')
       : '<span class="muted small">Chưa ai trong team ghi tiến độ. Artist / Anim liên kết thư mục chung và nhập tên là hiện ở đây.</span>'}</div>
@@ -553,10 +584,13 @@ function workspaceView() {
             <div class="card-h"><div><b class="mono">${esc(c.type === 'set' ? c.set.name : s.key)}</b><span class="muted small">${esc(s.dir || '(gốc)')} · ${s.w}×${s.h}${c.type === 'set' ? ` · bộ ${c.slots.length} ảnh` : ''}</span></div><span class="badge ${STATUS[c.status].cls}">${STATUS[c.status].label}</span></div>
             <div class="pair">
               <figure><figcaption>GỐC</figcaption><div class="thumb checker"><img src="${origUrl(s)}" alt="" loading="lazy"></div></figure>
-              <figure><figcaption>RESKIN</figcaption>${r?.preview ? `<div class="thumb checker"><img src="${r.preview}" alt=""></div>` : `<div class="thumb drop">${ICON.upload}<span>Kéo thả ${c.slots.length > 1 ? c.slots.length + ' ảnh' : 'ảnh'}</span></div>`}</figure>
+              <figure><figcaption>RESKIN</figcaption>${r?.preview ? `<div class="thumb checker"><img src="${r.preview}" alt=""></div>` : (() => {
+                const peer = (othersOf(p).get(s.id) || []).find((x) => x.preview);
+                return peer ? `<div class="thumb checker peerbox">${peerImg(peer, s.id)}<span class="peer-tag">${esc(peer.name)} ${p.kind === 'folder' ? 'đang vẽ · chưa nộp' : 'đang vẽ'}</span></div>`
+                  : `<div class="thumb drop">${ICON.upload}<span>Kéo thả ${c.slots.length > 1 ? c.slots.length + ' ảnh' : 'ảnh'}</span></div>`; })()}</figure>
             </div>
             ${c.type === 'set' ? `<div class="dots">${c.dots.map((d) => `<i class="${STATUS[d].cls}"></i>`).join('')}</div>` : ''}
-            <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${screenChips(p, c)}${s.kind === 'fx' ? kindBadge('fx') : ''}</div>
+            <div class="row"><span class="note ${STATUS[c.status].cls} grow">${esc(cardNote(p, c))}</span>${peerChips(p, c)}${screenChips(p, c)}${s.kind === 'fx' ? kindBadge('fx') : ''}</div>
           </button>`, c);
         }).join('') || `<div class="empty">${app.screenSel ? (p.kind === 'folder' ? 'Màn này chưa có asset. Bấm “Chọn để gán vào màn”, chọn các thẻ rồi bấm Gán.' : 'Màn này chưa có asset nào.') : 'Không có asset nào khớp bộ lọc.'}</div>`}
       </div>
@@ -625,6 +659,9 @@ function detailView() {
               return r ? `<div class="cell checker ${r.status}" style="aspect-ratio:${s.w}/${s.h}"><img src="${r.preview}" alt="Reskin ${esc(s.key)}">${box}</div>`
                 : `<label class="cell drop" style="aspect-ratio:${s.w}/${s.h}">${ICON.upload}<span>Chọn ảnh</span><input type="file" accept="image/*" data-act="pick-one" data-id="${esc(s.id)}" hidden></label>`;
             }).join('')}
+            ${[...new Set(slots.flatMap((s) => (othersOf(p).get(s.id) || []).map((x) => x.name)))].map((name) => `<div class="rowlabel"><b>Bản của ${esc(name)}</b><span class="muted small">${p.kind === 'folder' ? 'đang vẽ, chưa nộp' : 'người cùng làm'}</span></div>
+              ${slots.map((s) => { const x = (othersOf(p).get(s.id) || []).find((y) => y.name === name);
+                return x?.preview ? `<div class="cell checker peerbox" style="aspect-ratio:${s.w}/${s.h}">${peerImg(x, s.id)}</div>` : `<div class="cell empty-peer" style="aspect-ratio:${s.w}/${s.h}"><span class="muted small">${x ? 'chưa có ảnh xem trước' : 'chưa vẽ'}</span></div>`; }).join('')}`).join('')}
           </div>
           <div class="dtools">
             ${rule === 'free' ? `<label class="check"><input type="checkbox" data-act="toggle-safe" ${app.safe ? 'checked' : ''}> Hiện vùng an toàn (món đồ nên chiếm ${SAFE.min * 100}–${SAFE.max * 100}% khung)</label>` : ''}
@@ -668,15 +705,148 @@ function applyView() {
           <tbody>${a.rows.map((r) => `<tr><td><b>${esc(r.group)}</b></td><td class="r">${r.n}</td><td class="r muted">${fmtBytes(r.before)}</td><td class="r"><b class="${r.after > r.before * 1.1 ? 'warn-t' : 'ok-t'}">${fmtBytes(r.after)}</b></td></tr>`).join('')}</tbody>
         </table>
         <label class="check"><input type="checkbox" data-act="opt-backup" ${a.backup ? 'checked' : ''}> Sao lưu ảnh cũ vào <code>.reskin/backup/${esc(a.stamp)}/</code></label>
+        ${glBox(a)}
       </div>
       <footer class="sheet-f">
         <button class="link" data-act="undo" ${app.project.lastBackup ? '' : 'disabled'}>Hoàn tác lần áp dụng trước</button>
         <span class="grow"></span>
         <button class="btn" data-act="close-apply">Huỷ</button>
-        <button class="btn primary" data-act="do-apply" ${a.ok.length ? '' : 'disabled'}>Áp dụng ${a.ok.length} ảnh</button>
+        <button class="btn primary" data-act="do-apply" ${a.ok.length && !(a.gitlab && glCfg() && a.glErr) ? '' : 'disabled'}>${a.gitlab && glCfg() ? `Áp dụng ${a.ok.length} file + đẩy lên ${esc(a.glo?.mode === 'existing' ? a.glo.existing || 'GitLab' : a.glo?.newName || 'GitLab')}${a.glo?.mr ? ' + MR' : ''}` : `Áp dụng ${a.ok.length} ảnh`}</button>
       </footer>
     </div>
   </div>`;
+}
+
+/* ---------------- GitLab: branch + Merge Request after applying ---------------- */
+const glCfg = () => app.project?.recentId ? GL.loadCfg(app.project.recentId) : null;
+/** Where to push: remembered per project (branch choice, MR on/off, MR target). */
+const glOptsKey = () => `glOpts.${app.project.recentId}`;
+function glDefaults(a, cfg) {
+  const saved = F.pref.get(glOptsKey(), {}) || {};
+  const target = saved.target || cfg.target || 'main';
+  return { mode: saved.mode || 'new', existing: saved.existing || '', newName: `reskin/${a.stamp.replace(/[^\w-]+/g, '-')}`, base: saved.base || target,
+    mr: saved.mr ?? true, target, message: glText(app.project, a.ok).title };
+}
+const BRANCH_OK = /^(?!\/|.*\/\/|.*\.\.|.*@\{)[\w.\/-]+(?<![./])$/;
+function glBox(a) {
+  const cfg = glCfg();
+  if (!cfg) return `<div class="glbox"><b>GitLab</b><span class="muted small grow">Kết nối để đẩy ảnh lên GitLab (chọn nhánh, commit, Merge Request) ngay sau khi áp dụng.</span>
+    <button class="btn small" data-act="gl-setup">Kết nối GitLab…</button></div>`;
+  const o = a.glo, br = a.branches;
+  const names = br?.list?.map((b) => b.name) || [];
+  const opt = (n, sel) => `<option value="${esc(n)}" ${n === sel ? 'selected' : ''}>${esc(n)}</option>`;
+  const branchSel = (k, sel, extra = '') => br?.list ? `<select data-act="gl-opt" data-k="${k}">${extra}${names.map((n) => opt(n, sel)).join('')}</select>`
+    : `<input data-act="gl-opt" data-k="${k}" value="${esc(sel)}" placeholder="tên nhánh">`;
+  const push = o.mode === 'new' ? o.newName : o.existing;
+  const clash = o.mode === 'new' && names.includes(o.newName);
+  const badName = o.mode === 'new' && !BRANCH_OK.test(o.newName || '');
+  const same = o.mr && push === o.target;
+  const prot = o.mode === 'existing' && br?.list?.find((b) => b.name === o.existing)?.protected;
+  a.glErr = !a.gitlab ? '' : !push ? 'Chọn nhánh để đẩy' : badName ? 'Tên nhánh không hợp lệ (chỉ chữ, số, - _ . /)' : clash ? `Nhánh “${o.newName}” đã có — chọn “Nhánh có sẵn” hoặc đổi tên` : same ? 'Nhánh đẩy và nhánh nhận Merge Request đang trùng nhau' : !o.message?.trim() ? 'Cần commit message' : '';
+  return `<div class="glbox on"><div class="row grow"><label class="check grow"><input type="checkbox" data-act="opt-gitlab" ${a.gitlab ? 'checked' : ''}>
+      <span>Đẩy lên GitLab · <b>${esc(cfg.project)}</b></span></label><button class="link small" data-act="gl-setup">Cài đặt</button></div>
+    ${a.gitlab ? `<div class="glform">
+      <span class="gl-l">Đẩy vào nhánh</span>
+      <div class="gl-v"><div class="seg small"><button class="${o.mode === 'new' ? 'on' : ''}" data-act="gl-mode" data-m="new">Nhánh mới</button><button class="${o.mode === 'existing' ? 'on' : ''}" data-act="gl-mode" data-m="existing">Nhánh có sẵn</button></div>
+        ${o.mode === 'new' ? `<input class="gl-name" data-act="gl-opt" data-k="newName" value="${esc(o.newName)}" placeholder="vd art/level-3"> <span class="muted small">tách từ</span> ${branchSel('base', o.base)}`
+          : branchSel('existing', o.existing, `<option value="" ${o.existing ? '' : 'selected'} disabled>— chọn nhánh —</option>`)}
+        ${br?.loading ? '<span class="muted small">đang lấy danh sách nhánh…</span>' : br?.error ? `<span class="warn-t small">${esc(br.error)}</span>` : ''}
+        ${prot ? `<span class="warn-t small block">Nhánh được bảo vệ (protected): có thể bị GitLab từ chối nếu bạn không có quyền push.</span>` : ''}</div>
+      <span class="gl-l">Commit message</span>
+      <div class="gl-v"><input class="gl-msg" data-act="gl-opt" data-k="message" value="${esc(o.message)}"></div>
+      <span class="gl-l">Merge Request</span>
+      <div class="gl-v"><label class="check"><input type="checkbox" data-act="gl-mr" ${o.mr ? 'checked' : ''}> Tạo Merge Request vào</label> ${branchSel('target', o.target)}
+        <span class="muted small block">${o.mr ? 'Nếu nhánh này đã có MR đang mở vào nhánh đó thì chỉ thêm commit vào MR cũ.' : 'Chỉ commit + push vào nhánh, không tạo MR.'}</span></div>
+    </div>
+    ${a.glErr ? `<span class="warn-t small block">${esc(a.glErr)}</span>` : ''}
+    <span class="muted small block">File <code>.meta</code> giữ nguyên. Repo lưu ảnh bằng Git LFS → SkinForge ghi <code>.reskin/push-reskin.bat</code> để bấm đúp (git trên máy commit đúng các file này lên nhánh đã chọn, không đổi nhánh đang làm).</span>` : ''}</div>`;
+}
+async function glLoadBranches(a) {
+  const cfg = glCfg(); if (!cfg || !a) return;
+  a.branches = { loading: true }; safeDrawApply();
+  try { a.branches = { list: await GL.listBranches(cfg) }; } catch (e) { a.branches = { error: 'Không lấy được danh sách nhánh: ' + e.message }; }
+  const names = a.branches.list?.map((b) => b.name) || [];
+  if (names.length) {
+    if (!names.includes(a.glo.base)) a.glo.base = names[0];
+    if (!names.includes(a.glo.target)) a.glo.target = names[0];
+    if (a.glo.existing && !names.includes(a.glo.existing)) a.glo.existing = '';
+  }
+  safeDrawApply();
+}
+function safeDrawApply() { if (app.apply && !/^(INPUT)$/.test(document.activeElement?.tagName)) draw(); }
+function glSetupView() {
+  const g = app.gl, f = (k, label, ph, type = 'text', hint = '') => `<label class="field"><span>${label}</span><input type="${type}" data-act="gl-field" data-k="${k}" value="${esc(g[k] || '')}" placeholder="${esc(ph)}" autocomplete="off">${hint ? `<small class="muted">${hint}</small>` : ''}</label>`;
+  return `<div class="modal" role="dialog" aria-modal="true" aria-label="Kết nối GitLab"><div class="sheet">
+    <header class="sheet-h"><div><b>Kết nối GitLab</b><span class="muted small block">Lưu trên máy này cho dự án ${esc(app.project.name)} · không gửi đi đâu ngoài GitLab của bạn</span></div>
+      <button class="iconbtn" data-act="gl-cancel" aria-label="Đóng">${ICON.close}</button></header>
+    <div class="sheet-b form">
+      ${f('host', 'Địa chỉ GitLab', 'https://gitlab.com', 'url', 'gitlab.com hoặc GitLab riêng của công ty, vd https://git.congty.vn')}
+      ${f('project', 'Project', 'nhom/ten-game', 'text', 'Đường dẫn sau địa chỉ GitLab, vd falcon/cleaning-unity')}
+      ${f('token', 'Personal Access Token', 'glpat-…', 'password', 'GitLab → Preferences → Access Tokens → scope <b>api</b>, đặt ngày hết hạn. Tài khoản cần quyền Developer trở lên.')}
+      ${f('target', 'Nhánh nhận Merge Request', 'để trống = nhánh mặc định (main)')}
+      ${f('subdir', 'Thư mục dự án Unity trong repo', 'để trống nếu repo chính là dự án Unity', 'text', 'Vd repo có <code>Cleaning/Assets/…</code> thì ghi <code>Cleaning</code>')}
+      ${g.msg ? `<div class="chk ${g.ok ? 'ok' : 'error'}"><i>${g.ok ? '✓' : '✗'}</i><div><b>${esc(g.msg)}</b></div></div>` : ''}
+    </div>
+    <footer class="sheet-f">${glCfg() ? '<button class="link danger" data-act="gl-forget">Xoá kết nối</button>' : ''}<span class="grow"></span>
+      <button class="btn" data-act="gl-test">Kiểm tra kết nối</button><button class="btn primary" data-act="gl-save">Lưu</button></footer>
+  </div></div>`;
+}
+function glDoneView() {
+  const d = app.glDone;
+  return `<div class="modal" role="dialog" aria-modal="true" aria-label="GitLab"><div class="sheet">
+    <header class="sheet-h"><div><b>${d.error ? 'Chưa đẩy được lên GitLab' : d.script ? 'Cần một bước trên máy' : d.url ? (d.reused ? 'Đã thêm vào Merge Request' : 'Đã tạo Merge Request') : 'Đã đẩy lên GitLab'}</b></div><button class="iconbtn" data-act="gl-close" aria-label="Đóng">${ICON.close}</button></header>
+    <div class="sheet-b">
+      ${!d.error && !d.script ? `<p>${d.count} file → nhánh <code>${esc(d.branch)}</code>${d.url ? ` → Merge Request vào <b>${esc(d.target)}</b>${d.reused ? ' (MR đang mở, đã thêm commit)' : ''}` : ''}.</p>
+        <p class="row">${d.url ? `<a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">Mở Merge Request</a>` : ''}${d.commitUrl ? `<a class="btn" href="${esc(d.commitUrl)}" target="_blank" rel="noopener">Xem commit</a>` : ''}</p>
+        <p class="muted small">${d.url ? 'Người phụ trách Unity: checkout nhánh, mở Unity kiểm tra rồi merge.' : 'Commit nằm trên GitLab.'} Ảnh cũng đã được ghi vào thư mục game trên máy này (hiện là file đã sửa trong Fork / git — sau khi merge, Discard rồi Pull).</p>` : ''}
+      ${d.script ? `<p>${d.lfs} / ${d.count} file nằm trong <b>Git LFS</b> — trình duyệt không tải được lên kho LFS của GitLab.</p>
+        <p>SkinForge đã ghi <code>.reskin/push-reskin.bat</code> (Windows) và <code>.reskin/push-reskin.sh</code> (macOS) vào thư mục game. <b>Bấm đúp file .bat</b>: git trên máy commit đúng ${d.count} file này lên nhánh <code>${esc(d.branch)}</code>${d.newBranch ? ` (nhánh mới, tách từ ${esc(d.base)})` : ''} và push${d.target ? `, mở Merge Request vào <b>${esc(d.target)}</b> — link MR hiện ở dòng <code>remote:</code>` : ''}.</p>
+        <p class="muted small">Cần git + Git LFS đã đăng nhập GitLab trên máy. Script không đổi nhánh và không đụng các thay đổi đang dở trong thư mục game.</p>` : ''}
+      ${d.error ? `<div class="chk error"><i>✗</i><div><b>${esc(d.error)}</b><span>Ảnh đã được ghi vào thư mục game trên máy — có thể commit / push bằng git như thường.</span></div></div>` : ''}
+    </div>
+    <footer class="sheet-f"><span class="grow"></span><button class="btn" data-act="gl-close">Đóng</button></footer></div></div>`;
+}
+/** Title + description of the MR: which topics (levels / popups) changed, by whom. */
+function glText(p, ok) {
+  const ids = new Set(ok.map((x) => x.s.id));
+  const topics = p.screens.map((sc) => ({ name: sc.name, n: sc.slots.filter((id) => ids.has(id)).length })).filter((t) => t.n).sort((a, b) => b.n - a.n);
+  const artists = [...new Set((p.team?.list || []).filter((m) => Object.keys(m.handed || {}).some((id) => ids.has(id))).map((m) => m.name))];
+  const head = topics.slice(0, 3).map((t) => t.name.replace(/ · prefab .*/, '')).join(', ') + (topics.length > 3 ? ` +${topics.length - 3}` : '');
+  const title = `Reskin: ${head || p.name} (${ok.length} file)`;
+  const description = [`Reskin tạo bởi SkinForge cho **${p.name}**.`, '', artists.length ? `Artist: ${artists.join(', ')}` : '', '',
+    '| Chủ đề | File |', '|---|---|', ...topics.map((t) => `| ${t.name} | ${t.n} |`), '',
+    'Mỗi ảnh giữ đúng kích thước pixel và định dạng ảnh gốc; file `.meta` không đổi (GUID giữ nguyên).', 'Kiểm tra: checkout nhánh → mở Unity → xem các level trên → merge.'].filter((l, i, a) => l || a[i - 1]).join('\n');
+  return { title, description };
+}
+async function glPush(p, a) {
+  const cfg = glCfg(); if (!cfg) return;
+  const o = a.glo, newBranch = o.mode === 'new', branch = newBranch ? o.newName.trim() : o.existing;
+  const pre = (cfg.subdir ? cfg.subdir.replace(/^\/|\/$/g, '') + '/' : '');
+  const files = a.ok.map(({ s: sl, out }) => { const local = (p.assetRoot ? p.assetRoot + '/' : '') + sl.id; return { local, path: pre + local, blob: out }; });
+  const { description } = glText(p, a.ok);
+  const message = o.message.trim();
+  const mr = o.mr ? { target: o.target, title: message.split('\n')[0], description } : null;
+  F.pref.set(glOptsKey(), { mode: o.mode, existing: o.existing, base: o.base, mr: o.mr, target: o.target });
+  try {
+    busy('Đang kết nối GitLab…');
+    const isLfs = await GL.lfsMatcher(cfg, newBranch ? o.base : branch);
+    const lfs = files.filter((f) => isLfs(f.path)).length;
+    if (lfs) {
+      const sc = GL.pushScripts({ branch, newBranch, base: o.base, mr, stamp: a.stamp.replace(/[^\w-]+/g, '-') });
+      await F.writeFile(p.root, '.reskin/push-files.txt', new Blob([files.map((f) => f.local).join('\n') + '\n']));
+      await F.writeFile(p.root, '.reskin/push-message.txt', new Blob([message + (mr ? '\n\n' + description : '') + '\n']));
+      await F.writeFile(p.root, '.reskin/push-reskin.bat', new Blob([sc.bat]));
+      await F.writeFile(p.root, '.reskin/push-reskin.sh', new Blob([sc.sh]));
+      app.glDone = { script: true, lfs, count: files.length, branch, newBranch, base: o.base, target: mr?.target };
+      F.logActivity(`${p.name} — ${files.length} file chờ đẩy lên ${branch} qua push-reskin.bat (Git LFS)`, 'warn');
+    } else {
+      const r = await GL.pushToGitLab(cfg, { files, branch, newBranch, base: o.base, message, mr, onProgress: (d, t) => busy('Đang đẩy lên GitLab…', d, t) });
+      app.glDone = { ...r, count: files.length };
+      const what = r.url ? `Merge Request ${r.url}` : `commit lên ${branch}`;
+      await touchRecent({ mrUrl: r.url || null, activity: `${p.name} — ${what}` }); F.logActivity(`${p.name} — ${files.length} file → ${branch}${r.url ? ` · ${r.url}` : ''}`, 'info');
+    }
+  } catch (e) { console.error(e); app.glDone = { error: e.message }; }
+  finally { busy(); draw(); }
 }
 
 /* ---------------- project loading ---------------- */
@@ -972,7 +1142,7 @@ async function loadJob(job, z) {
   p.fits = job.fits || {};
   p.screens = await SC.revive(brief.screens, async (path) => z[`refs/${path}`] || null);
   app.linkLocal = null;
-  p.claims = job.claims || []; p.handed = job.handed || {}; p.handedAt = job.handedAt || null;
+  p.claims = job.claims || []; p.handed = job.handed || {}; p.handedAt = job.handedAt || null; p.previewSent = job.previewSent || {};
   if (job.link) {
     const ok = job.link.queryPermission ? (await job.link.queryPermission({ mode: 'read' })) === 'granted' : true;
     if (ok) { try { await linkSync(p, job.link, { quiet: true }); } catch {} } else p.linkPending = job.link;
@@ -996,7 +1166,7 @@ async function saveJob({ sent = false } = {}) {
   const job = await F.jobGet(p.jobId); if (!job) return;
   const sm = summary(p), now = Date.now();
   schedulePush(p);
-  await F.jobPut({ ...job, claims: p.claims || [], handed: p.handed || {}, handedAt: p.handedAt || null, reskins: [...p.reskins].map(([id, r]) => ({ id, name: r.name, blob: r.blob })), fits: p.fits,
+  await F.jobPut({ ...job, claims: p.claims || [], handed: p.handed || {}, handedAt: p.handedAt || null, previewSent: p.previewSent || {}, reskins: [...p.reskins].map(([id, r]) => ({ id, name: r.name, blob: r.blob })), fits: p.fits,
     done: p.reskins.size, errors: sm.error, updatedAt: now, ...(sent ? { exportedAt: now } : {}) });
 }
 
@@ -1066,11 +1236,29 @@ function myRecord(p) {
     const done = [...cards.values()].filter((ids) => ids.every((id) => p.reskins.has(id))).length;
     if (done || (p.claims || []).includes(sc.id) || sc.owner === app.me) topics[sc.id] = { done, total: cards.size };
   }
-  return { name: app.me, role: 'Artist / Anim', updated: Date.now(), claims: p.claims || [], topics, done: p.reskins.size, total: p.slots.length, handed: p.handed || {}, handedAt: p.handedAt || null };
+  const drawn = {};
+  for (const [id, r] of p.reskins) if (r.status !== 'error') drawn[id] = reskinHash(r);
+  const viewing = p.screens.find((x) => x.id === app.screenSel)?.name || null;
+  return { name: app.me, role: 'Artist / Anim', updated: Date.now(), claims: p.claims || [], topics, done: p.reskins.size, total: p.slots.length, handed: p.handed || {}, handedAt: p.handedAt || null,
+    drawn, previews: p.previewSent || {}, viewing };
 }
+const reskinHash = (r) => `${r.blob.size}-${r.name}`;
 async function pushMe(p) {
   if (p?.kind !== 'brief' || !p.link?.write || !app.me) return;
-  try { await T.writeMe(teamBase(p), myRecord(p)); await teamRefresh(p); } catch (e) { console.warn('team write', e); }
+  try { await sendPreviews(p); await T.writeMe(teamBase(p), myRecord(p)); await teamRefresh(p); } catch (e) { console.warn('team write', e); }
+}
+/** Small previews of what I drew, so teammates and Game Design see the art before it is handed in. */
+async function sendPreviews(p) {
+  const base = teamBase(p); if (!base) return;
+  p.previewSent ||= {};
+  let n = 0;
+  for (const [id, r] of p.reskins) {
+    const s = p.slotById.get(id); if (!s || s.kind === 'sound' || s.kind === 'anim' || r.status === 'error') continue;
+    const h = reskinHash(r); if (p.previewSent[id] === h) continue;
+    try { await T.writePreview(base, app.me, id, await T.thumb(r.blob)); p.previewSent[id] = h; } catch (e) { console.warn('preview', e); }
+    if (++n >= 40) { schedulePush(p); break; }   // a big batch continues on the next push
+  }
+  for (const id of Object.keys(p.previewSent)) if (!p.reskins.has(id)) delete p.previewSent[id];
 }
 function schedulePush(p) { clearTimeout(app._push); app._push = setTimeout(() => pushMe(p).then(() => safeDraw()), 1500); }
 function safeDraw() { if (!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) && !app.detail && !app.crop && !app.apply) draw(); }
@@ -1163,7 +1351,8 @@ async function openApply() {
   const now = new Date(), pad = (n) => String(n).padStart(2, '0');
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
   const total = p.slots.reduce((a, s) => a + s.bytes, 0);
-  app.apply = { ok, skip, rows: Object.values(rows), before: total, after: total - before + after, stamp, backup: true };
+  app.apply = { ok, skip, rows: Object.values(rows), before: total, after: total - before + after, stamp, backup: true, gitlab: !!glCfg() && F.pref.get('glOn', true) };
+  if (glCfg()) { app.apply.glo = glDefaults(app.apply, glCfg()); glLoadBranches(app.apply); }
   draw();
 }
 
@@ -1184,6 +1373,7 @@ async function doApply() {
     await touchRecent({ appliedAt: Date.now(), activity: text }); F.logActivity(text, 'info');
     busy(); app.apply = null; draw();
     toast(`Đã áp dụng ${a.ok.length} ảnh vào game`, 'ok');
+    if (a.gitlab && glCfg()) await glPush(p, a);
   } catch (e) { busy(); console.error(e); toast('Lỗi khi ghi file: ' + e.message, 'error'); }
 }
 
@@ -1236,7 +1426,7 @@ document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
   const act = el.dataset.act, p = app.project;
   const curScreen = () => p?.screens.find((x) => x.id === app.screenSel);
-  if (act === 'select-screen') { app.screenSel = app.screenSel === el.dataset.id ? null : el.dataset.id; app.group = null; draw(); }
+  if (act === 'select-screen') { app.screenSel = app.screenSel === el.dataset.id ? null : el.dataset.id; app.group = null; draw(); if (p.kind === 'brief') schedulePush(p); }
   if (act === 'add-screen') { const sc = await addScreen(prompt('Tên màn / popup (ví dụ: Popup Complete, Shop)')); if (sc) draw(); }
   if (act === 'add-preset') { await addScreen(el.dataset.name); draw(); }
   if (act === 'rename-screen') { const sc = curScreen(); const n = sc && prompt('Đổi tên màn / popup', sc.name); if (n?.trim()) { sc.name = n.trim(); await saveMeta(); draw(); } }
@@ -1278,7 +1468,13 @@ document.addEventListener('click', async (e) => {
   if (act === 'claim' || act === 'unclaim') {
     if (!app.me) setMe(prompt('Tên của bạn (hiện trong bảng tiến độ team)', '') || '');
     if (!app.me) return;
-    const id = app.screenSel; p.claims = (p.claims || []).filter((x) => x !== id); if (act === 'claim') p.claims.push(id);
+    const id = app.screenSel;
+    if (act === 'claim') {
+      const sc = p.screens.find((x) => x.id === id);
+      const taken = [...new Set([sc?.owner, ...(p.team?.list || []).filter((m) => T.slug(m.name) !== T.slug(app.me) && (m.claims || []).includes(id)).map((m) => m.name)])].filter((n) => n && T.slug(n) !== T.slug(app.me));
+      if (taken.length && !confirm(`“${sc?.name}” đang do ${taken.join(', ')} làm.\nVẫn nhận cùng? (Hai người sẽ vẽ trùng ảnh — nên chia nhau trước.)`)) return;
+    }
+    p.claims = (p.claims || []).filter((x) => x !== id); if (act === 'claim') p.claims.push(id);
     await saveJob(); await pushMe(p); draw(); toast(act === 'claim' ? 'Đã nhận phần này — cả team thấy trong bảng tiến độ' : 'Đã bỏ nhận', 'ok');
   }
   if (act === 'hand-in') {
@@ -1381,6 +1577,20 @@ document.addEventListener('click', async (e) => {
   if (act === 'close-apply') { app.apply = null; draw(); }
   if (act === 'do-apply') await doApply();
   if (act === 'undo') await undoApply();
+  if (act === 'gl-setup') { app.gl = { host: 'https://gitlab.com', target: '', subdir: '', ...(glCfg() || {}) }; draw(); }
+  if (act === 'gl-cancel') { app.gl = null; draw(); }
+  if (act === 'gl-mode' && app.apply?.glo) { app.apply.glo.mode = el.dataset.m; draw(); }
+  if (act === 'gl-close') { app.glDone = null; draw(); }
+  if (act === 'gl-forget') { GL.saveCfg(p.recentId, null); app.gl = null; if (app.apply) app.apply.gitlab = false; draw(); toast('Đã xoá kết nối GitLab trên máy này'); }
+  if (act === 'gl-test' || act === 'gl-save') {
+    const g = app.gl, cfg = { host: (g.host || 'https://gitlab.com').trim().replace(/\/+$/, ''), project: (g.project || '').trim().replace(/^https?:\/\/[^/]+\//, '').replace(/\.git$/, ''), token: (g.token || '').trim(), target: (g.target || '').trim(), subdir: (g.subdir || '').trim() };
+    if (!cfg.project || !cfg.token) { g.ok = false; g.msg = 'Cần điền Project và Token'; draw(); return; }
+    busy('Đang kiểm tra GitLab…');
+    try { const info = await GL.testCfg(cfg); cfg.target ||= info.target; g.ok = true; g.msg = `Kết nối được ${info.name} · nhánh ${info.target}${info.lfs ? ' · có Git LFS' : ''}`;
+      if (act === 'gl-save') { GL.saveCfg(p.recentId, cfg); app.gl = null; if (app.apply) { app.apply.gitlab = true; app.apply.glo = glDefaults(app.apply, cfg); glLoadBranches(app.apply); } toast('Đã lưu kết nối GitLab', 'ok'); }
+    } catch (err) { g.ok = false; g.msg = err.message; }
+    finally { busy(); draw(); }
+  }
 });
 document.addEventListener('change', async (e) => {
   const el = e.target, act = el.dataset?.act; if (!act) return;
@@ -1392,6 +1602,9 @@ document.addEventListener('change', async (e) => {
   }
   if (act === 'toggle-safe') { app.safe = el.checked; draw(); }
   if (act === 'opt-backup') app.apply.backup = el.checked;
+  if (act === 'opt-gitlab') { app.apply.gitlab = el.checked; F.pref.set('glOn', el.checked); if (el.checked && !app.apply.glo && glCfg()) { app.apply.glo = glDefaults(app.apply, glCfg()); glLoadBranches(app.apply); } draw(); }
+  if (act === 'gl-mr' && app.apply?.glo) { app.apply.glo.mr = el.checked; draw(); }
+  if (act === 'gl-opt' && app.apply?.glo) { app.apply.glo[el.dataset.k] = el.value; draw(); }
   if (act === 'set-owner') {
     const sc = app.project.screens.find((x) => x.id === app.screenSel);
     if (sc) { sc.owner = el.value.trim(); await saveMeta(); draw(); toast(sc.owner ? `Đã giao “${sc.name}” cho ${sc.owner}` : 'Đã bỏ giao', 'ok'); }
@@ -1415,6 +1628,8 @@ document.addEventListener('change', async (e) => {
   el.value && el.type === 'file' && (el.value = '');
 });
 document.addEventListener('input', (e) => {
+  if (e.target.dataset?.act === 'gl-field' && app.gl) { app.gl[e.target.dataset.k] = e.target.value; return; }
+  if (e.target.dataset?.act === 'gl-opt' && app.apply?.glo && e.target.tagName === 'INPUT') { app.apply.glo[e.target.dataset.k] = e.target.value; return; }
   if (e.target.dataset?.act === 'topic-q') {
     app.topicQ = e.target.value;
     clearTimeout(app._tq); app._tq = setTimeout(() => { const pos = e.target.selectionStart; draw(); const i = $('[data-act="topic-q"]'); i?.focus(); i?.setSelectionRange(pos, pos); }, 200);
@@ -1427,6 +1642,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (app.crop) { URL.revokeObjectURL(app.crop.url); app.crop = null; draw(); }
+  else if (app.gl || app.glDone) { app.gl = null; app.glDone = null; draw(); }
   else if (app.lightbox) { app.lightbox = null; draw(); } else if (app.detail || app.apply) { app.detail = null; app.apply = null; draw(); }
   else if (app.selecting) { app.selecting = false; app.selected.clear(); draw(); }
 });

@@ -42,7 +42,8 @@ Item / món · Khác), mỗi chủ đề ghi số Art / Effect / Anim / Âm than
 ghi file của mình nên bản đồng bộ không bị đè nhau:
 
 ```
-<game>/.reskin/team/<tên>.json     ai, nhận phần nào, đã vẽ bao nhiêu, đã nộp gì
+<game>/.reskin/team/<tên>.json     ai, nhận phần nào, đã vẽ ảnh nào, đã nộp gì, đang mở chủ đề nào
+<game>/.reskin/preview/<tên>/…     ảnh xem trước nhỏ (≤ 320 px) của từng ảnh đang vẽ — tự cập nhật khi vẽ
 <game>/.reskin/inbox/<tên>/…       ảnh đã nộp, đúng đường dẫn asset của game
 ```
 
@@ -50,8 +51,12 @@ ghi file của mình nên bản đồng bộ không bị đè nhau:
   bấm **Nhập** để lấy bài của từng người vào workspace (kiểm tra như gói reskin), rồi Áp dụng.
 - **Artist / Anim** liên kết thư mục chung (cấp quyền ghi), nhập tên một lần; **Nhận phần này** trên chủ đề, lọc **Phần
   của tôi**, vẽ và kéo ảnh vào như thường; **Nộp vào thư mục chung** thay cho gửi zip (vẫn xuất zip được).
-- **Bảng tiến độ team** (cả hai chế độ): từng người làm phần nào, cập nhật lúc nào; từng chủ đề: đã vẽ / đã nộp /
-  Game Design đã nhận / tổng. Tự cập nhật vài giây một lần.
+- **Bảng tiến độ team** (cả hai chế độ): từng người làm phần nào, **đang mở chủ đề nào**, cập nhật lúc nào; từng chủ đề:
+  đã vẽ / đã nộp / Game Design đã nhận / tổng. Tự cập nhật vài giây một lần.
+- **Xem bài của nhau ngay khi đang vẽ** (cả artist lẫn Game Design): thẻ ảnh có chip **✎ tên** của người đã vẽ ảnh đó; nếu
+  mình chưa vẽ thì ô Reskin hiện bản xem trước của họ (“An đang vẽ”, với Game Design là “An đang vẽ · chưa nộp”); mở chi
+  tiết có thêm hàng **Bản của <tên>** cho từng người. Hai người vẽ trùng một ảnh thấy ngay.
+- **Nhận trùng phần**: bấm “Nhận phần này” trên chủ đề đã có người giao / nhận thì SkinForge hỏi lại trước.
 
 ## Màn / popup và yêu cầu
 
@@ -101,6 +106,34 @@ gợi ý nhanh), rồi ghi yêu cầu cho từng màn:
 3. **Nhập gói reskin** (hoặc kéo thả ảnh / thư mục / zip) → tự khớp theo tên file và đường dẫn, chạy kiểm tra.
 4. **Áp dụng vào game** → mỗi ảnh được xuất đúng **kích thước và định dạng của ảnh gốc** rồi ghi đè; ảnh cũ được sao
    lưu, có nút hoàn tác. Công cụ build của game (Falcon IDE, GameKit, Vite dev server…) tự build lại khi file đổi.
+5. **Đẩy lên GitLab (Merge Request)** — tuỳ chọn trong bảng Áp dụng, xem dưới.
+
+## GitLab: chọn nhánh, commit, Merge Request
+
+Bấm **Kết nối GitLab…** trong bảng Áp dụng (một lần cho mỗi dự án, lưu trên máy này): địa chỉ GitLab (gitlab.com hoặc
+server công ty), project (`nhom/ten-game`), **Personal Access Token** scope `api` (tài khoản Developer trở lên), nhánh nhận
+MR mặc định và thư mục dự án Unity trong repo nếu repo không phải chính dự án Unity. **Kiểm tra kết nối** → **Lưu**.
+
+Từ đó bảng Áp dụng có phần **Đẩy lên GitLab** (giống thao tác commit / push trên Fork), nhớ lựa chọn lần trước:
+
+- **Đẩy vào nhánh**: *Nhánh mới* (gõ tên, vd `art/level-3`, chọn nhánh để tách ra) hoặc *Nhánh có sẵn* (danh sách nhánh
+  lấy từ GitLab). Tên trùng nhánh đã có / tên không hợp lệ bị chặn; nhánh protected có cảnh báo.
+- **Commit message**: điền sẵn theo level / màn đã đổi, sửa được.
+- **Tạo Merge Request vào** nhánh nào (bật / tắt). Nếu nhánh đó đã có MR đang mở vào cùng nhánh đích thì chỉ thêm commit
+  vào MR cũ. Tắt MR = chỉ commit + push.
+
+Khi bấm Áp dụng: ghi file vào thư mục game trên máy như trước (sao lưu + hoàn tác), rồi đọc `.gitattributes` của nhánh:
+
+- Không file nào thuộc **Git LFS** → SkinForge gọi GitLab API: commit đúng các file đã đổi lên nhánh đã chọn (nhiều file
+  thì chia vài commit ≤ 25 MB), tạo / dùng lại MR, hiện link **Mở Merge Request** / **Xem commit**. Commit nằm trên GitLab,
+  ảnh trên máy hiện là file đã sửa (sau khi merge: Discard rồi Pull trong Fork).
+- Có file thuộc LFS → kho LFS của GitLab không nhận tải lên từ trang web, nên SkinForge ghi `.reskin/push-reskin.bat`
+  (Windows) / `.reskin/push-reskin.sh` (macOS) kèm `push-files.txt`, `push-message.txt`: **bấm đúp** để git trên máy commit
+  đúng các file đó lên nhánh đã chọn (Git LFS xử lý như thường) và mở MR bằng push option của GitLab. Script dùng một
+  index tạm nên **không đổi nhánh đang làm và không đụng các thay đổi dở** trong thư mục game. Cần git ≥ 2.26 + Git LFS
+  đã đăng nhập GitLab.
+
+File `.meta` không bị đụng tới (GUID giữ nguyên). Token chỉ lưu trong trình duyệt của máy đó và chỉ gửi tới GitLab.
 
 ## Quy tắc kiểm tra
 
@@ -122,9 +155,11 @@ Với **bộ ảnh**: các ảnh reskin trong cùng bộ phải trùng vị trí
   project.json          quy tắc từng nhóm, thông số tự căn, lần sao lưu gần nhất
   source/…              ảnh gốc artist gửi (để mở lại project, xuất lại sau này)
   backup/<thời-gian>/…  ảnh của game trước mỗi lần áp dụng
+  team/ preview/ inbox/ tiến độ, ảnh xem trước và bài nộp của từng người (thư mục chung)
+  push-reskin.bat|.sh   lệnh commit + push (+ MR) khi repo dùng Git LFS, kèm push-files.txt / push-message.txt
 ```
 
-Nên thêm `.reskin/backup/` (và tuỳ ý `.reskin/source/`) vào `.gitignore` của game.
+Nên thêm `.reskin/` vào `.gitignore` của game (hoặc ít nhất `backup/`, `preview/`, `inbox/`, `push-reskin.*`).
 
 ## Phát triển
 
