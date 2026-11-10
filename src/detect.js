@@ -4,6 +4,7 @@
 // Unity: *.prefab / *.unity named like a panel → sprite GUIDs → image .meta files. Godot: *.tscn → res:// paths.
 // Everything is a best guess that Game Design can correct afterwards.
 import { ext, stem } from './fsx.js';
+import { detectUnity } from './unity.js';
 
 const SRC_EXT = new Set(['html', 'htm', 'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx', 'vue', 'svelte', 'css', 'scss', 'less', 'json', 'prefab', 'unity', 'tscn']);
 const SKIP = new Set(['node_modules', 'dist', 'build', 'out', '.git', '.reskin', '.falcon', '.falcon-publish', 'Library', 'Temp', 'Logs', 'obj', 'coverage', '.idea', '.vscode', 'Packages']);
@@ -107,7 +108,7 @@ function topLevelChunks(text) {
   return chunks;
 }
 
-export async function detectScreens(root, slots, assetRoot = '') {
+export async function detectScreens(root, slots, assetRoot = '', onProgress) {
   const files = await walkSource(root, '', []);
   const { resolve } = assetIndex(slots);
   // "img/items/" + name means "any item": only folders made mostly of image sets count as picked at runtime
@@ -220,22 +221,13 @@ export async function detectScreens(root, slots, assetRoot = '') {
     }
   }
 
-  // 3) Unity prefabs / scenes named like a panel: sprite GUIDs → image .meta files
-  const unity = files.filter((f) => /\.(prefab|unity)$/i.test(f.path) && UNITY_NAME.test(f.path.split('/').pop()));
-  if (unity.length) {
-    const guid = new Map(), prefix = assetRoot ? assetRoot + '/' : '';
-    for (const s of slots) {
-      try {
-        const meta = await (await getRel(root, `${prefix}${s.id}.meta`)).text();
-        const g = meta.match(/^guid:\s*([0-9a-f]{32})/m)?.[1]; if (g) guid.set(g, s);
-      } catch {}
-    }
-    for (const f of unity) {
-      const key = f.path, nm = stem(f.path.split('/').pop());
-      const hits = [...new Set([...(await f.file.text()).matchAll(/guid:\s*([0-9a-f]{32})/g)].map((m) => guid.get(m[1])).filter(Boolean))];
-      if (!hits.length) continue;
-      screens.set(key, { key, kind: POPUP_WORD.test(nm) ? 'popup' : 'screen', name: `${POPUP_WORD.test(nm) ? 'Popup' : 'Màn'} ${humanize(nm)}`, file: f.path, id: nm, slots: new Set(hits.map((s) => s.id)), dyn: new Set(), order: order++ });
-    }
+  // 3) Unity: follow GUID references from level / room prefabs, scenes and panels through sprites, materials,
+  //    Spine data and enum-picked files (see unity.js)
+  let unityTopics = [];
+  let isUnity = false; try { await root.getDirectoryHandle('ProjectSettings'); isUnity = true; } catch {}
+  if (isUnity) {
+    unityTopics = (await detectUnity(root, slots, assetRoot, onProgress)).topics;
+    for (const t of unityTopics) screens.set(t.key, t);
   }
 
   // 4) Godot scenes: ext_resource paths
@@ -257,6 +249,10 @@ export async function detectScreens(root, slots, assetRoot = '') {
   const perType = new Map(); for (const t of named.values()) perType.set(t.type, (perType.get(t.type) || 0) + 1);
   for (const t of named.values()) {
     if (perType.get(t.type) < 2) continue;   // one "stage_1" alone is just a file name
+    // Unity: "lv26_bg.png" belongs to the level prefab 26.prefab (its play order may differ)
+    const u = unityTopics.find((x) => x.kind === t.type && x.prefabId === t.n && !x.suffix);
+    if (u) { t.slots.forEach((id) => u.slots.add(id)); continue; }
+    if (unityTopics.some((x) => x.kind === t.type)) continue;   // levels come from prefabs: a name-only topic would be a duplicate
     // "room_2.webp" + the 2nd entry of data "tiers"/"rooms" are the same room
     const d = dataTopics.find((x) => x.kind === t.type && x.n === t.n);
     if (d) { t.slots.forEach((id) => d.slots.add(id)); continue; }

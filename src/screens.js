@@ -71,6 +71,16 @@ export function screenFiles(sc) {
   return out;
 }
 
+/** Topics found by an earlier scan that the new scan no longer finds, and that nobody has worked on
+ *  (no owner, request, reference or overview image): safe to drop so a better scan replaces them. */
+export function pruneStale(screens, found) {
+  const keys = new Set(found.map((d) => d.key));
+  const untouched = (sc) => !sc.owner && !sc.shot && !sc.art.text && !sc.anim.text && !sc.art.refs.length && !sc.anim.refs.length;
+  const drop = screens.filter((sc) => sc.auto && !keys.has(sc.auto.key) && untouched(sc));
+  for (const sc of drop) screens.splice(screens.indexOf(sc), 1);
+  return drop.length;
+}
+
 /** Merge screens found in the game's code: update the ones found before (by key), add new ones. Manual assets stay. */
 export function mergeDetected(screens, found) {
   let added = 0, updated = 0;

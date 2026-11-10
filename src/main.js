@@ -749,7 +749,8 @@ function newProject(o) {
 async function scanCode(p, quiet = false) {
   busy('Đang tìm màn / popup trong code game…');
   try {
-    const r = await detectScreens(p.root, p.slots, p.assetRoot);
+    const r = await detectScreens(p.root, p.slots, p.assetRoot, (msg, d, t) => busy(msg, d, t || undefined));
+    const pruned = SC.pruneStale(p.screens, r.screens);
     const res = SC.mergeDetected(p.screens, r.screens);
     p.unassigned = r.unassigned;
     const shots = await F.tryGetDir(p.root, '.reskin/shots');

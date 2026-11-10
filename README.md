@@ -62,7 +62,14 @@ tạo danh sách màn / popup kèm asset của từng cái:
   `<dialog>`…) và mọi element id bên trong; rồi các dòng JS / TS / CSS đụng tới những id đó và gọi tên asset
   (`img/ui/deal_${kind}.webp` → mọi `deal_*`); dữ liệu game dạng JSON (`{"tiers":[{"bg":"bg2"}]}` + `D.tiers` trong code).
   Thư mục toàn bộ ảnh (vd `items/`) được gọi theo biến (`"img/items/" + name`) được ghi là **đổi theo món đang chơi**.
-- **Unity**: prefab / scene tên kiểu `*Panel`, `*Popup`, `*Screen`… → GUID sprite → file `.meta` của ảnh.
+- **Unity**: đọc mọi `.meta` (GUID → file) rồi lần theo tham chiếu từ từng **prefab level / room** (`Levels/12.prefab`,
+  `lv3.prefab`…), **scene** và **prefab màn / popup**, xuyên qua các asset trung gian: Sprite `.asset` → texture, material →
+  texture, Spine `SkeletonDataAsset` → atlas → material → texture + `.json`, ScriptableObject config… Âm thanh / icon
+  game chọn bằng số enum (`pickToolAudioId: 62` → `AudioId.choi_re` → `choi_re.ogg`; `toolName: 36` → icon cùng tên) cũng
+  được gán. Level đánh số theo **thứ tự chơi** nếu game có danh sách level (`index` / `levelId`), kèm tên prefab.
+  Ảnh đánh số theo level mà prefab không trỏ tới (`lv12_clean`, `icon_win_12`…) vào đúng level đó; dụng cụ / hiệu ứng
+  dùng ở nhiều level (≥ 30%) gom vào **Dụng cụ / hiệu ứng dùng chung**; âm thanh code gọi theo tên enum vào **Âm thanh
+  chung**. Lần quét lại thay các chủ đề tự tìm cũ chưa ai đụng tới (chưa giao, chưa có yêu cầu / ảnh).
 - **Godot**: `*.tscn` → `ext_resource path="res://…"`.
 - Kết quả là gợi ý: Game Design sửa / gán thêm / bỏ bớt như màn tạo tay. Asset có trong code nhưng chưa rõ thuộc màn nào
   được đếm riêng.
