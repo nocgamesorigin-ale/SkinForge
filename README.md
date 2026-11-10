@@ -25,6 +25,34 @@ Lần đầu mở, SkinForge hỏi vai trò (nhớ trên máy, đổi được �
 | **Animation** | Spine (`.json` / `.skel` / `.atlas`), Lottie (`.json` / `.lottie`), sprite sheet (TexturePacker `.json` / `.plist`), DragonBones, Unity `.anim` / `.controller` — `.json` chỉ được nhận khi nội dung đúng là animation | Anim (trong brief, nguyên định dạng; có nút tải file gốc) | cùng định dạng và loại; **còn đủ tên animation / skin / frame / state mà game gọi**; fps, độ dài, texture; khi áp dụng thì chép nguyên file |
 | **Âm thanh** | `.mp3 .ogg .wav .m4a .aac` | Game Design (không vào brief) | cùng định dạng với file gốc; độ dài và dung lượng gần bằng; nghe thử gốc/mới; khi áp dụng thì chép nguyên file |
 
+## Chủ đề: màn, popup, room, level, item
+
+Asset được tách theo **chủ đề** thay vì một danh sách chung. Cột trái chia theo loại (Màn · Popup · Room · Level ·
+Item / món · Khác), mỗi chủ đề ghi số Art / Effect / Anim / Âm thanh, ai làm và tiến độ. Có ô lọc chủ đề, và mục
+**Chưa thuộc chủ đề nào** cho asset dùng chung / chưa rõ chỗ dùng.
+
+- **Màn / popup**: từ code (xem dưới).
+- **Room / Level**: từ tên thư mục / file (`rooms/room_2/…`, `lv3_bg.png`, `room_1.webp`…) và từ dữ liệu game: mảng
+  `levels`, `stages`, `rooms`, `tiers`, `chapters`, `worlds`, `items`… trong file JSON, mỗi phần tử một chủ đề kèm tên
+  (vd thrift-store: `Room 1 · Thrift & Love` = bg + room_1; `Item 1 · Olive Crossbody Bag` = 5 ảnh + nền).
+
+## Làm việc theo team (thư mục chung)
+
+Đặt thư mục game (hoặc chỉ `.reskin`) ở chỗ cả team cùng thấy (Google Drive / OneDrive đồng bộ, ổ mạng). Mỗi người chỉ
+ghi file của mình nên bản đồng bộ không bị đè nhau:
+
+```
+<game>/.reskin/team/<tên>.json     ai, nhận phần nào, đã vẽ bao nhiêu, đã nộp gì
+<game>/.reskin/inbox/<tên>/…       ảnh đã nộp, đúng đường dẫn asset của game
+```
+
+- **Game Design** giao chủ đề cho từng người (ô “Giao cho” trên chủ đề). Ở cột trái có **Bài nộp trong thư mục chung**:
+  bấm **Nhập** để lấy bài của từng người vào workspace (kiểm tra như gói reskin), rồi Áp dụng.
+- **Artist / Anim** liên kết thư mục chung (cấp quyền ghi), nhập tên một lần; **Nhận phần này** trên chủ đề, lọc **Phần
+  của tôi**, vẽ và kéo ảnh vào như thường; **Nộp vào thư mục chung** thay cho gửi zip (vẫn xuất zip được).
+- **Bảng tiến độ team** (cả hai chế độ): từng người làm phần nào, cập nhật lúc nào; từng chủ đề: đã vẽ / đã nộp /
+  Game Design đã nhận / tổng. Tự cập nhật vài giây một lần.
+
 ## Màn / popup và yêu cầu
 
 **Tự nhận diện từ code game** (khi mở thư mục lần đầu, hoặc bấm “Quét code game”): SkinForge đọc source của game và tự
@@ -106,6 +134,7 @@ Mỗi lần push lên `main`, `.github/workflows/deploy.yml` build và đăng l�
 - `src/imaging.js` — phân tích ảnh (kích thước, alpha, vùng có hình), dựng ảnh xuất vào khung gốc.
 - `src/project.js` — slot, nhóm, bộ ảnh, khớp tên, các bước kiểm tra, tự căn.
 - `src/screens.js` — màn / popup, yêu cầu Art / Anim, ảnh ref + ảnh tổng thể, đếm asset theo thư mục.
-- `src/detect.js` — tìm màn / popup và asset của chúng trong code game (HTML/JS/CSS/JSON, Unity prefab, Godot tscn).
+- `src/detect.js` — tìm màn / popup / room / level và asset của chúng trong code và dữ liệu game (HTML/JS/CSS/JSON, Unity prefab, Godot tscn, tên file).
+- `src/team.js` — tiến độ team và bài nộp qua thư mục chung.
 - `src/zipx.js` — gói brief / gói reskin (fflate).
 - `src/main.js` — giao diện.

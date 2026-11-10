@@ -4,6 +4,7 @@ import { render, toPNG, fmtBytes, fmtSec } from './imaging.js';
 import { animTypeLabel } from './anim.js';
 import * as SC from './screens.js';
 import { detectScreens } from './detect.js';
+import * as T from './team.js';
 import { RULES, SAFE, KINDS, kindOf, isRaw, buildSlots, findSets, defaultGroups, matcher, makeReskin, checkAll, autoFit, summary } from './project.js';
 import { makeZip, readZip, download } from './zipx.js';
 
@@ -24,7 +25,8 @@ const STATUS = {
 
 // mode: 'gd' (Game Design: owns the game folders) | 'artist' (opens brief packs only) | null (not chosen yet)
 const app = { screen: 'home', mode: F.pref.get('mode'), project: null, filter: 'all', kind: 'all', group: null, search: '', recent: [], jobs: [], detail: null, safe: true,
-  screenSel: null, selecting: false, selected: new Set(), lightbox: null, crop: null };
+  screenSel: null, selecting: false, selected: new Set(), lightbox: null, crop: null,
+  board: false, mine: false, topicQ: '', me: F.pref.get('me', ''), open: new Set(F.pref.get('openSecs', ['screen', 'popup', 'room'])) };
 const urls = new Map();   // slot id → object URL of the original
 const thumbUrls = new Map();   // job id → [object URLs]
 const root = $('#app');
@@ -197,7 +199,8 @@ function cardsOf(p) {
   const cards = [];
   const seen = new Set();
   const sc = app.screenSel && p.screens.find((x) => x.id === app.screenSel);
-  const inScreen = sc ? new Set(sc.slots) : null;
+  const inScreen = sc ? new Set(sc.slots) : app.screenSel === '__none' ? new Set(noTopicIds(p))
+    : app.mine ? new Set(p.screens.filter((x) => isMine(p, x)).flatMap((x) => x.slots)) : null;
   for (const s of p.slots) {
     if (app.group && s.group !== app.group) continue;
     if (app.kind !== 'all' && s.kind !== app.kind) continue;
@@ -287,23 +290,61 @@ function decorate(html, c) {
 
 function screensSide(p) {
   const gd = p.kind === 'folder';
-  const list = gd ? p.screens : p.screens.filter((sc) => sc.slots.length || sc.shot || sc.art.text || sc.anim.text || sc.art.refs.length || sc.anim.refs.length);
-  const items = list.map((sc) => `<button class="gbtn ${app.screenSel === sc.id ? 'on' : ''}" data-act="select-screen" data-id="${sc.id}">
-      <span><span>${esc(sc.name)}</span><small class="rule bd-mini">${bdMini(sc, p)}${(() => { const r = [sc.art.text || sc.art.refs.length ? 'Art' : '', sc.anim.text || sc.anim.refs.length ? 'Anim' : ''].filter(Boolean); return r.length ? ` · <b class="req-on">Yêu cầu ${r.join(' + ')}</b>` : ''; })()}</small></span>
-      <span class="muted small">${sc.shot ? '<span class="has-shot" title="Có ảnh tổng thể">▣</span> ' : ''}${sc.slots.length}</span></button>`).join('');
-  const unused = SC.PRESETS.filter((n) => !p.screens.some((s) => s.name === n));
-  return `<span class="label">MÀN / POPUP</span>
+  let list = gd ? p.screens : p.screens.filter((sc) => sc.slots.length || sc.shot || sc.art.text || sc.anim.text || sc.art.refs.length || sc.anim.refs.length);
+  if (app.mine) list = list.filter((sc) => isMine(p, sc));
+  const q = app.topicQ.trim().toLowerCase();
+  if (q) list = list.filter((sc) => sc.name.toLowerCase().includes(q));
+  const team = p.team?.list || [], received = receivedSet(p);
+  const row = (sc) => {
+    const pr = T.topicProgress(sc, p, team, received);
+    const req = [sc.art.text || sc.art.refs.length ? 'Art' : '', sc.anim.text || sc.anim.refs.length ? 'Anim' : ''].filter(Boolean);
+    return `<button class="gbtn ${app.screenSel === sc.id ? 'on' : ''}" data-act="select-screen" data-id="${sc.id}">
+      <span><span>${esc(sc.name)}</span><small class="rule bd-mini">${kindMini(sc, p)}${req.length ? ` · <b class="req-on">Yêu cầu ${req.join(' + ')}</b>` : ''}</small>
+        ${pr.people.length ? `<small class="who">${pr.people.map((n) => `<span class="person ${n === app.me ? 'me' : ''}">${esc(n)}</span>`).join('')}</small>` : ''}</span>
+      <span class="tprog">${sc.shot ? '<span class="has-shot" title="Có ảnh tổng thể">▣</span>' : ''}${pr.total ? `<span class="muted small">${pr.received || pr.handed || pr.drawn}/${pr.total}</span>${progBar(pr)}` : `<span class="muted small">${sc.slots.length}</span>`}</span></button>`;
+  };
+  const sections = SC.TYPES.map((t) => ({ ...t, items: list.filter((sc) => SC.typeOf(sc) === t.type) })).filter((t) => t.items.length);
+  const open = (t) => q || app.mine || app.open.has(t.type) || sections.length === 1 || (app.screenSel && t.items.some((sc) => sc.id === app.screenSel));
+  const none = noTopicIds(p).length;
+  const unused = SC.PRESETS.filter((n) => !p.screens.some((x) => x.name === n));
+  return `<span class="label">CHỦ ĐỀ <span class="muted">· màn, popup, room, level…</span></span>
     ${gd ? '' : linkBox(p)}
-    ${items || `<span class="muted small side-note">${gd ? 'Nhóm asset theo nơi xuất hiện trong game để ghi yêu cầu cho Art / Anim.' : p.link ? 'Game Design chưa có màn / popup nào.' : 'Brief này chưa có danh sách màn / popup. Bấm “Liên kết yêu cầu từ Game Design” ở trên, hoặc nhờ Game Design xuất brief mới.'}</span>`}
-    ${gd ? `<div class="row side-note"><button class="link small" data-act="add-screen">+ Thêm màn / popup</button>${p.root ? `<button class="link small" data-act="rescan" title="Tìm màn / popup và asset của chúng trong code game">Quét code game</button>` : ''}</div>
-      ${p.unassigned?.length ? `<span class="muted small side-note">${p.unassigned.length} asset có trong code nhưng chưa rõ thuộc màn nào.</span>` : ''}
-      ${unused.length && p.screens.length < 3 ? `<div class="presets">${unused.slice(0, 6).map((n) => `<button class="preset" data-act="add-preset" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}` : ''}
+    <div class="side-tools">
+      ${p.screens.length > 8 ? `<input class="tq" type="search" data-act="topic-q" placeholder="Lọc chủ đề…" value="${esc(app.topicQ)}" aria-label="Lọc chủ đề">` : ''}
+      <div class="row">${!gd ? `<button class="chip ${app.mine ? 'on' : ''}" data-act="toggle-mine">Phần của tôi</button>` : ''}
+        <button class="chip ${app.board ? 'on' : ''}" data-act="toggle-board">Bảng tiến độ team</button></div>
+    </div>
+    ${sections.map((t) => `<button class="sec-h" data-act="toggle-sec" data-t="${t.type}" aria-expanded="${open(t)}"><span>${open(t) ? '▾' : '▸'} ${t.label}</span><span class="muted small">${t.items.length}</span></button>
+      ${open(t) ? t.items.map(row).join('') : ''}`).join('')}
+    ${none && p.screens.length ? `<button class="gbtn ${app.screenSel === '__none' ? 'on' : ''}" data-act="select-screen" data-id="__none"><span><span>Chưa thuộc chủ đề nào</span><small class="rule">dùng chung / chưa rõ chỗ dùng</small></span><span class="muted small">${none}</span></button>` : ''}
+    ${!list.length ? `<span class="muted small side-note">${gd ? 'Nhóm asset theo nơi xuất hiện trong game để ghi yêu cầu cho Art / Anim.' : app.mine ? 'Chưa có phần nào giao cho bạn hoặc bạn nhận.' : p.link ? 'Game Design chưa có chủ đề nào.' : 'Brief này chưa có danh sách chủ đề. Bấm “Liên kết yêu cầu từ Game Design” ở trên, hoặc nhờ Game Design xuất brief mới.'}</span>` : ''}
+    ${gd ? `<div class="row side-note"><button class="link small" data-act="add-screen">+ Thêm chủ đề</button>${p.root ? `<button class="link small" data-act="rescan" title="Tìm màn, popup, room, level và asset của chúng trong code / dữ liệu game">Quét code game</button>` : ''}</div>
+      ${p.unassigned?.length ? `<span class="muted small side-note">${p.unassigned.length} asset có trong code nhưng chưa rõ thuộc chủ đề nào.</span>` : ''}
+      ${unused.length && p.screens.length < 3 ? `<div class="presets">${unused.slice(0, 6).map((n) => `<button class="preset" data-act="add-preset" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}
+      ${inboxBox(p)}` : ''}
     <div class="side-sep"></div>`;
+}
+
+const progBar = (pr) => `<i class="pbar" title="Đã vẽ ${pr.drawn} · đã nộp ${pr.handed} · Game Design đã nhận ${pr.received} / ${pr.total}"><b style="width:${pct(pr.drawn, pr.total)}%"></b><b class="h" style="width:${pct(pr.handed, pr.total)}%"></b><b class="r" style="width:${pct(pr.received, pr.total)}%"></b></i>`;
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+function isMine(p, sc) { return !!app.me && (sc.owner === app.me || (p.claims || []).includes(sc.id)); }
+function noTopicIds(p) { const used = new Set(p.screens.flatMap((sc) => sc.slots)); return p.slots.filter((x) => !used.has(x.id)).map((x) => x.id); }
+function receivedSet(p) { return p.kind === 'folder' ? new Set(p.reskins.keys()) : new Set(p.linkReceived || []); }
+
+/** Game Design: art handed in to the shared folder, per person. */
+function inboxBox(p) {
+  const people = (p.team?.list || []).filter((m) => Object.keys(m.handed || {}).length);
+  if (!people.length) return '';
+  return `<div class="inbox-side"><span class="label">BÀI NỘP TRONG THƯ MỤC CHUNG</span>
+    ${people.map((m) => { const n = Object.keys(m.handed).length, fresh = Object.entries(m.handed).filter(([id, t]) => !p.reskins.has(id) || t > (p.importedAt?.[m.name] || 0)).length;
+      return `<div class="ib-row"><span class="grow"><b>${esc(m.name)}</b><br><span class="muted small">${n} file · nộp ${ago(m.handedAt)}</span></span>
+        <button class="btn small ${fresh ? 'primary' : ''}" data-act="import-inbox" data-who="${esc(m.name)}">${fresh ? `Nhập ${fresh} mới` : 'Nhập lại'}</button></div>`; }).join('')}</div>`;
 }
 
 /** Artist / Anim: live link to Game Design's requests (the game folder or its .reskin folder). */
 function linkBox(p) {
   if (p.link) return `<div class="linkbox on"><span class="dot"></span><b class="grow">Đang nhận yêu cầu từ Game Design</b>
+      <span class="small lb-full">${p.link.write ? `Bạn: <b>${esc(app.me || 'chưa đặt tên')}</b> <button class="link small" data-act="set-me">đổi</button>` : '<span class="muted">Chỉ đọc — cấp quyền ghi để chia sẻ tiến độ và nộp bài</span>'}</span>
       <span class="muted small lb-full">${esc(p.link.name)} · tự cập nhật · lần cuối ${new Date(p.link.at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
       <span class="lb-full row"><button class="link small" data-act="link-sync">Làm mới</button><button class="link small" data-act="link-off">Bỏ liên kết</button></span></div>`;
   if (!F.fsSupported) return `<div class="linkbox"><span class="muted small">Muốn nhận yêu cầu trực tiếp từ Game Design, hãy mở trang bằng Chrome / Edge.</span></div>`;
@@ -328,14 +369,19 @@ function reqPanel(p) {
     </div>`;
   };
   return `<section class="reqpanel">
-    <div class="reqpanel-h"><div><b>${esc(sc.name)}</b><span class="muted small"> · ${sc.slots.length} asset</span></div>
-      ${gd ? `<div class="row"><button class="link small" data-act="rename-screen">Đổi tên</button><button class="link small danger" data-act="del-screen">Xoá màn</button></div>` : ''}</div>
+    <div class="reqpanel-h"><div><b>${esc(sc.name)}</b><span class="muted small"> · ${sc.slots.length} asset · ${kindMini(sc, p)}</span>${progressLine(p, sc)}</div>
+      <div class="row">${ownerCtl(p, sc)}${gd ? `<button class="link small" data-act="rename-screen">Đổi tên</button><button class="link small danger" data-act="del-screen">Xoá</button>` : ''}</div></div>
     ${overview(p, sc, gd)}
     <div class="reqs">${role('art')}${role('anim')}</div>
   </section>`;
 }
 
 /** Group counts for the side list: "ui 9 · items 80*" (* = picked at runtime). */
+function kindMini(sc, p) {
+  const k = SC.kindCounts(sc, p), names = { art: 'Art', fx: 'Effect', anim: 'Anim', sound: 'Âm thanh' };
+  const dyn = (sc.auto?.dyn || []).map((d) => { const g = d.split('/')[0]; const n = new Set(p.slots.filter((x) => x.group === g).map((x) => x.set || x.id)).size; return n ? `<span>${esc(g)} <b>${n}</b><i title="Đổi theo món đang chơi">*</i></span>` : ''; });
+  return [...dyn, ...Object.entries(k).filter(([, n]) => n).map(([kk, n]) => `<span>${names[kk]} <b>${n}</b></span>`)].filter(Boolean).join(' · ');
+}
 function bdMini(sc, p) {
   return SC.breakdown(sc, p).map((r) => `<span>${esc(r.group)} <b>${r.dyn ? r.total : r.cards}</b>${r.dyn ? '<i title="Đổi theo món đang chơi">*</i>' : ''}</span>`).join(' · ');
 }
@@ -372,6 +418,50 @@ function cropView() {
       <button class="btn" data-act="crop-cancel">Huỷ</button><button class="btn primary" data-act="crop-ok">Dùng ảnh này</button></div>
     <div class="cropstage" id="cropStage"><img src="${c.url}" alt="Ảnh vừa chụp" draggable="false"><div class="croprect" id="cropRect" hidden></div></div>
   </div></div>`;
+}
+
+function progressLine(p, sc) {
+  const pr = T.topicProgress(sc, p, p.team?.list || [], receivedSet(p));
+  if (!pr.total) return '';
+  return `<div class="pline">${progBar(pr)}<span class="muted small">Đã vẽ <b>${pr.drawn}</b> · đã nộp <b>${pr.handed}</b> · Game Design đã nhận <b>${pr.received}</b> / ${pr.total}</span></div>`;
+}
+function ownerCtl(p, sc) {
+  const names = [...new Set([...(p.team?.list || []).map((m) => m.name), ...p.screens.map((x) => x.owner)].filter(Boolean))];
+  const claimers = (p.team?.list || []).filter((m) => (m.claims || []).includes(sc.id)).map((m) => m.name);
+  if (p.kind === 'folder') return `<label class="owner"><span class="muted small">Giao cho</span><input list="teamNames" data-act="set-owner" value="${esc(sc.owner)}" placeholder="tên artist…" size="12">
+      <datalist id="teamNames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist></label>
+    ${claimers.filter((n) => n !== sc.owner).length ? `<span class="muted small">Đã nhận: ${claimers.filter((n) => n !== sc.owner).map(esc).join(', ')}</span>` : ''}`;
+  const mine = (p.claims || []).includes(sc.id);
+  return `${sc.owner ? `<span class="muted small">Giao cho <b class="${sc.owner === app.me ? 'me-ink' : ''}">${esc(sc.owner)}</b></span>` : ''}
+    ${claimers.filter((n) => n !== app.me).length ? `<span class="muted small">· đang làm: ${claimers.filter((n) => n !== app.me).map(esc).join(', ')}</span>` : ''}
+    ${p.link?.write ? `<button class="btn small ${mine ? '' : 'primary'}" data-act="${mine ? 'unclaim' : 'claim'}">${mine ? 'Bỏ nhận' : 'Nhận phần này'}</button>` : ''}`;
+}
+
+/** Shared progress: who does what and how far, from the team files in the shared folder. */
+function boardView(p) {
+  const team = p.team?.list || [], received = receivedSet(p);
+  const base = teamBase(p);
+  const rows = SC.TYPES.map((t) => ({ ...t, items: p.screens.filter((sc) => SC.typeOf(sc) === t.type).map((sc) => ({ sc, pr: T.topicProgress(sc, p, team, received) })).filter((x) => x.pr.total) })).filter((t) => t.items.length);
+  const all = rows.flatMap((t) => t.items), tot = all.reduce((a, x) => a + x.pr.total, 0);
+  const sum = (k) => all.reduce((a, x) => a + x.pr[k], 0);
+  return `<section class="board">
+    <div class="board-h"><div><b>Bảng tiến độ team</b><span class="muted small"> · ${base ? `thư mục chung: ${esc(p.kind === 'folder' ? p.root.name : p.link.name)} · tự cập nhật` : 'chưa liên kết thư mục chung — chỉ thấy tiến độ của bạn'}</span></div>
+      <button class="btn small" data-act="toggle-board">Đóng</button></div>
+    <div class="board-sum">${progBar({ total: tot, drawn: sum('drawn'), handed: sum('handed'), received: sum('received') })}
+      <span>Đã vẽ <b>${sum('drawn')}</b> · Đã nộp <b>${sum('handed')}</b> · Game Design đã nhận <b>${sum('received')}</b> / ${tot} thẻ</span>
+      <span class="legend"><i class="lg d"></i>đã vẽ <i class="lg h"></i>đã nộp <i class="lg r"></i>đã nhận</span></div>
+    <div class="people">${team.length ? team.map((m) => {
+      const topics = p.screens.filter((sc) => sc.owner === m.name || (m.claims || []).includes(sc.id));
+      return `<div class="person-card ${m.name === app.me ? 'me' : ''}"><b>${esc(m.name)}</b><span class="muted small">${esc(m.role || '')} · cập nhật ${ago(m.updated)}</span>
+        <span class="small">${topics.length} phần: ${topics.slice(0, 4).map((sc) => esc(sc.name)).join(', ')}${topics.length > 4 ? '…' : ''}</span>
+        <span class="small">Đã vẽ <b>${m.done || 0}</b> ảnh · đã nộp <b>${Object.keys(m.handed || {}).length}</b></span></div>`; }).join('')
+      : '<span class="muted small">Chưa ai trong team ghi tiến độ. Artist / Anim liên kết thư mục chung và nhập tên là hiện ở đây.</span>'}</div>
+    <table class="btable"><thead><tr><th>Chủ đề</th><th>Người làm</th><th>Tiến độ</th><th class="num">Vẽ</th><th class="num">Nộp</th><th class="num">GD nhận</th><th class="num">Tổng</th></tr></thead>
+      <tbody>${rows.map((t) => `<tr class="tsec"><td colspan="7">${t.label} · ${t.items.length}</td></tr>${t.items.map(({ sc, pr }) => `<tr>
+        <td><button class="link" data-act="board-open" data-id="${sc.id}">${esc(sc.name)}</button></td>
+        <td>${pr.people.map((n) => `<span class="person ${n === app.me ? 'me' : ''}">${esc(n)}</span>`).join('') || '<span class="muted small">chưa giao</span>'}</td>
+        <td>${progBar(pr)}</td><td class="num">${pr.drawn}</td><td class="num">${pr.handed}</td><td class="num">${pr.received}</td><td class="num">${pr.total}</td></tr>`).join('')}`).join('')}</tbody></table>
+  </section>`;
 }
 
 function selectBar(p) {
@@ -414,6 +504,7 @@ function workspaceView() {
         <label class="btn">Nhập reskin / âm thanh<input type="file" accept=".zip,image/*,audio/*,${ANIM_ACCEPT}" multiple data-act="import-files" hidden></label>
         <button class="btn primary" data-act="open-apply" ${readyCount ? '' : 'disabled'}>Áp dụng vào game (${readyCount})</button>`
       : `<label class="btn">Chọn file<input type="file" accept="image/*,${ANIM_ACCEPT}" multiple data-act="import-files" hidden></label>
+        ${p.link?.write ? `<button class="btn" data-act="hand-in" ${p.reskins.size ? '' : 'disabled'} title="Ghi ảnh đã vẽ vào thư mục chung để Game Design nhập">Nộp vào thư mục chung (${p.reskins.size})</button>` : ''}
         <button class="btn primary" data-act="export-reskin" ${p.reskins.size ? '' : 'disabled'}>Xuất gói reskin (${p.reskins.size})</button>`}
     </div>`;
   return `${header(extra)}
@@ -438,7 +529,7 @@ function workspaceView() {
         <br><br><b>Quy tắc</b><br><b>Khung tự do:</b> ${RULES.free.hint} Ảnh trong một bộ phải khớp nhau, không cần khớp ảnh gốc.<br><b>Giữ tỉ lệ khung:</b> ${RULES.fixed.hint}${p.kind === 'folder' ? `<br><b>Âm thanh:</b> ${RULES.sound.hint}` : ''}</div>
     </aside>
     <main class="main">
-      ${reqPanel(p)}
+      ${app.board ? boardView(p) : `${reqPanel(p)}
       <div class="toolbar">
         <label class="search">${'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6B7280" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>'}<span class="sr">Tìm asset</span><input type="search" data-act="search" placeholder="Tìm theo tên file, ví dụ bag_1" value="${esc(app.search)}"></label>
         <div class="seg kinds" role="group" aria-label="Lọc theo loại">
@@ -469,7 +560,7 @@ function workspaceView() {
           </button>`, c);
         }).join('') || `<div class="empty">${app.screenSel ? (p.kind === 'folder' ? 'Màn này chưa có asset. Bấm “Chọn để gán vào màn”, chọn các thẻ rồi bấm Gán.' : 'Màn này chưa có asset nào.') : 'Không có asset nào khớp bộ lọc.'}</div>`}
       </div>
-      ${cards.length > (app.limit || 120) ? `<button class="btn center" data-act="more">Hiện thêm (${cards.length - (app.limit || 120)})</button>` : ''}
+      ${cards.length > (app.limit || 120) ? `<button class="btn center" data-act="more">Hiện thêm (${cards.length - (app.limit || 120)})</button>` : ''}`}
     </main>
   </div>
   ${selectBar(p)}
@@ -620,6 +711,7 @@ async function openFolder(handle) {
       p.fits = saved.fits || {};
       p.lastBackup = saved.lastBackup || null;
       p.screens = await SC.revive(saved.screens, SC.folderRef.read(handle));
+      p.importedAt = saved.importedAt || {};
     }
     // reskins imported earlier are kept as the artist's masters in .reskin/source/
     const src = await F.tryGetDir(handle, '.reskin/source');
@@ -638,6 +730,7 @@ async function openFolder(handle) {
     if (firstScan) await scanCode(p, true);
     await finishLoad(p);
     if (firstScan && p.screens.some((s) => s.auto)) await saveMeta();
+    await teamRefresh(p); draw();
     const prev = (await F.recentGet(p.recentId)) || {};
     await F.recentPut({ ...prev, id: p.recentId, name: info.name, engine: info.engine, handle, path: handle.name + (info.assetRoot ? '/' + info.assetRoot : ''),
       opened: Date.now(), assets: slots.length, sets: Object.keys(p.sets).length, done: p.reskins.size, bytes: slots.reduce((a, s) => a + s.bytes, 0) });
@@ -723,7 +816,7 @@ async function saveMeta() {
   if (p.kind === 'brief') return saveJob();
   if (p.kind !== 'folder') return;
   const groups = Object.fromEntries(Object.values(p.groups).map((g) => [g.name, { rule: g.rule }]));
-  await F.writeJSON(p.root, '.reskin/project.json', { tool: 'SkinForge', version: 1, project: p.name, assetRoot: p.assetRoot, groups, fits: p.fits, lastBackup: p.lastBackup,
+  await F.writeJSON(p.root, '.reskin/project.json', { tool: 'SkinForge', version: 1, project: p.name, received: [...p.reskins.keys()], importedAt: p.importedAt || {}, assetRoot: p.assetRoot, groups, fits: p.fits, lastBackup: p.lastBackup,
     screens: SC.serialize(p.screens) });
 }
 
@@ -878,6 +971,7 @@ async function loadJob(job, z) {
   p.fits = job.fits || {};
   p.screens = await SC.revive(brief.screens, async (path) => z[`refs/${path}`] || null);
   app.linkLocal = null;
+  p.claims = job.claims || []; p.handed = job.handed || {}; p.handedAt = job.handedAt || null;
   if (job.link) {
     const ok = job.link.queryPermission ? (await job.link.queryPermission({ mode: 'read' })) === 'granted' : true;
     if (ok) { try { await linkSync(p, job.link, { quiet: true }); } catch {} } else p.linkPending = job.link;
@@ -900,7 +994,8 @@ async function saveJob({ sent = false } = {}) {
   const p = app.project; if (!p?.jobId) return;
   const job = await F.jobGet(p.jobId); if (!job) return;
   const sm = summary(p), now = Date.now();
-  await F.jobPut({ ...job, reskins: [...p.reskins].map(([id, r]) => ({ id, name: r.name, blob: r.blob })), fits: p.fits,
+  schedulePush(p);
+  await F.jobPut({ ...job, claims: p.claims || [], handed: p.handed || {}, handedAt: p.handedAt || null, reskins: [...p.reskins].map(([id, r]) => ({ id, name: r.name, blob: r.blob })), fits: p.fits,
     done: p.reskins.size, errors: sm.error, updatedAt: now, ...(sent ? { exportedAt: now } : {}) });
 }
 
@@ -925,20 +1020,66 @@ async function linkSync(p, handle, { quiet = false } = {}) {
   for (const sc of p.screens) { for (const role of Object.keys(SC.ROLES)) sc[role].refs.forEach((r) => URL.revokeObjectURL(r.url)); if (sc.shot) URL.revokeObjectURL(sc.shot.url); }
   p.screens = screens;
   if (app.screenSel && !screens.some((s) => s.id === app.screenSel)) app.screenSel = null;
-  p.link = { handle, name: handle.name === '.reskin' ? saved.project || 'Game Design' : handle.name, at: Date.now(), mtime: found.file.lastModified };
+  p.link = { handle, pre: found.pre, write: !!p.link?.write || (handle.queryPermission ? (await handle.queryPermission({ mode: 'readwrite' })) === 'granted' : true),
+    name: handle.name === '.reskin' ? saved.project || 'Game Design' : handle.name, at: Date.now(), mtime: found.file.lastModified };
+  p.linkReceived = saved.received || [];
+  await teamRefresh(p);
+  const own = app.me && p.team.list.find((m) => T.slug(m.name) === T.slug(app.me));
+  if (own) { p.claims = [...new Set([...(p.claims || []), ...(own.claims || [])])]; p.handed = { ...(own.handed || {}), ...(p.handed || {}) }; p.handedAt = own.handedAt || p.handedAt; }
   p.linkPending = null;
   return true;
 }
 
 async function linkStart(p, handle) {
-  if (!(await F.ensurePermission(handle, 'read'))) { toast('Chưa được cấp quyền đọc thư mục', 'error'); return; }
+  // write access lets this person share progress and hand in art; read-only still shows Game Design's requests
+  let write = false;
+  try { write = await F.ensurePermission(handle, 'readwrite'); } catch {}
+  if (!write && !(await F.ensurePermission(handle, 'read'))) { toast('Chưa được cấp quyền đọc thư mục', 'error'); return; }
+  p.link = { write };
+  if (write && !app.me) setMe(prompt('Tên của bạn (hiện trong bảng tiến độ team)', '') || '');
   busy('Đang lấy yêu cầu của Game Design…');
   try {
     if (!(await linkSync(p, handle))) return;
     const job = await F.jobGet(p.jobId); if (job) await F.jobPut({ ...job, link: handle });
+    await pushMe(p);
     toast(`Đã liên kết — ${p.screens.length} màn / popup`, 'ok');
   } finally { busy(); draw(); }
 }
+
+/* ---------- team: shared progress files ---------- */
+function teamBase(p) {
+  if (p?.kind === 'folder' && p.root) return { handle: p.root, pre: '.reskin/' };
+  if (p?.link?.handle) return { handle: p.link.handle, pre: p.link.pre ?? '.reskin/' };
+  return null;
+}
+async function teamRefresh(p) {
+  const base = teamBase(p); if (!base) { p.team = { list: [], sig: '' }; return false; }
+  try { const t = await T.readTeam(base); const changed = t.sig !== p.team?.sig; p.team = t; return changed; } catch { return false; }
+}
+function setMe(name) { app.me = (name || '').trim(); F.pref.set('me', app.me); }
+function myRecord(p) {
+  const topics = {};
+  for (const sc of p.screens) {
+    const cards = new Map();
+    for (const id of sc.slots) { const s = p.slotById.get(id); if (!s || s.kind === 'sound') continue; const k = s.set || s.id; if (!cards.has(k)) cards.set(k, []); cards.get(k).push(id); }
+    const done = [...cards.values()].filter((ids) => ids.every((id) => p.reskins.has(id))).length;
+    if (done || (p.claims || []).includes(sc.id) || sc.owner === app.me) topics[sc.id] = { done, total: cards.size };
+  }
+  return { name: app.me, role: 'Artist / Anim', updated: Date.now(), claims: p.claims || [], topics, done: p.reskins.size, total: p.slots.length, handed: p.handed || {}, handedAt: p.handedAt || null };
+}
+async function pushMe(p) {
+  if (p?.kind !== 'brief' || !p.link?.write || !app.me) return;
+  try { await T.writeMe(teamBase(p), myRecord(p)); await teamRefresh(p); } catch (e) { console.warn('team write', e); }
+}
+function schedulePush(p) { clearTimeout(app._push); app._push = setTimeout(() => pushMe(p).then(() => safeDraw()), 1500); }
+function safeDraw() { if (!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) && !app.detail && !app.crop && !app.apply) draw(); }
+async function teamPoll() {
+  const p = app.project;
+  if (!p || app.screen !== 'workspace' || app._teamBusy) return;
+  app._teamBusy = true;
+  try { if (await teamRefresh(p)) safeDraw(); } finally { app._teamBusy = false; }
+}
+setInterval(teamPoll, 5000);
 
 /** Re-read when Game Design saves (checked every few seconds and when the tab comes back). */
 async function linkPoll() {
@@ -1128,7 +1269,35 @@ document.addEventListener('click', async (e) => {
     }
   }
   if (act === 'open-ref') { app.lightbox = el.dataset.url; draw(); }
-  if (act === 'link-pick') { try { await linkStart(p, await window.showDirectoryPicker({ id: 'skinforge-link', mode: 'read' })); } catch (err) { if (err.name !== 'AbortError') toast(err.message, 'error'); } }
+  if (act === 'toggle-sec') { const t = el.dataset.t; app.open.has(t) ? app.open.delete(t) : app.open.add(t); F.pref.set('openSecs', [...app.open]); draw(); }
+  if (act === 'toggle-mine') { if (!app.me) setMe(prompt('Tên của bạn', '') || ''); app.mine = !app.mine && !!app.me; app.screenSel = null; draw(); }
+  if (act === 'toggle-board') { app.board = !app.board; if (app.board) await teamRefresh(p); draw(); }
+  if (act === 'board-open') { app.board = false; app.screenSel = el.dataset.id; app.group = null; draw(); }
+  if (act === 'set-me') { setMe(prompt('Tên của bạn (hiện trong bảng tiến độ team)', app.me) || app.me); await pushMe(p); draw(); }
+  if (act === 'claim' || act === 'unclaim') {
+    if (!app.me) setMe(prompt('Tên của bạn (hiện trong bảng tiến độ team)', '') || '');
+    if (!app.me) return;
+    const id = app.screenSel; p.claims = (p.claims || []).filter((x) => x !== id); if (act === 'claim') p.claims.push(id);
+    await saveJob(); await pushMe(p); draw(); toast(act === 'claim' ? 'Đã nhận phần này — cả team thấy trong bảng tiến độ' : 'Đã bỏ nhận', 'ok');
+  }
+  if (act === 'hand-in') {
+    if (!app.me) setMe(prompt('Tên của bạn (để Game Design biết bài của ai)', '') || '');
+    if (!app.me) return;
+    const items = [...p.reskins].map(([id, r]) => { const s2 = p.slotById.get(id); return { id, path: `${s2.dir ? s2.dir + '/' : ''}${s2.key}.${F.ext(r.name) || s2.ext}`, blob: r.blob }; });
+    busy('Đang nộp vào thư mục chung…', 0, items.length);
+    try {
+      await T.handIn(teamBase(p), app.me, items, (d, t) => busy('Đang nộp vào thư mục chung…', d, t));
+      const now = Date.now(); p.handed = { ...(p.handed || {}) }; items.forEach((it) => { p.handed[it.id] = now; }); p.handedAt = now;
+      await saveJob({ sent: true }); await pushMe(p); toast(`Đã nộp ${items.length} ảnh — Game Design sẽ thấy trong “Bài nộp”`, 'ok');
+    } catch (err) { toast('Không nộp được: ' + err.message, 'error'); } finally { busy(); draw(); }
+  }
+  if (act === 'import-inbox') {
+    const who = el.dataset.who, entries = await T.readInbox(teamBase(p), who);
+    if (!entries.length) { toast('Không thấy file nào trong bài nộp này', 'warn'); return; }
+    p.importedAt = { ...(p.importedAt || {}), [who]: Date.now() };
+    await importEntries(entries); toast(`Đã nhập ${entries.length} file của ${who}`, 'ok'); draw();
+  }
+  if (act === 'link-pick') { try { await linkStart(p, await window.showDirectoryPicker({ id: 'skinforge-link', mode: 'readwrite' })); } catch (err) { if (err.name !== 'AbortError') toast(err.message, 'error'); } }
   if (act === 'link-local' && app.linkLocal) await linkStart(p, app.linkLocal);
   if (act === 'link-resume' && p.linkPending) await linkStart(p, p.linkPending);
   if (act === 'link-sync' && p.link) { await linkSync(p, p.link.handle); draw(); }
@@ -1222,6 +1391,10 @@ document.addEventListener('change', async (e) => {
   }
   if (act === 'toggle-safe') { app.safe = el.checked; draw(); }
   if (act === 'opt-backup') app.apply.backup = el.checked;
+  if (act === 'set-owner') {
+    const sc = app.project.screens.find((x) => x.id === app.screenSel);
+    if (sc) { sc.owner = el.value.trim(); await saveMeta(); draw(); toast(sc.owner ? `Đã giao “${sc.name}” cho ${sc.owner}` : 'Đã bỏ giao', 'ok'); }
+  }
   if (act === 'shot-file' && el.files[0]) {
     const sc = app.project.screens.find((x) => x.id === app.screenSel);
     if (sc) await openCrop(el.files[0]);
@@ -1241,6 +1414,11 @@ document.addEventListener('change', async (e) => {
   el.value && el.type === 'file' && (el.value = '');
 });
 document.addEventListener('input', (e) => {
+  if (e.target.dataset?.act === 'topic-q') {
+    app.topicQ = e.target.value;
+    clearTimeout(app._tq); app._tq = setTimeout(() => { const pos = e.target.selectionStart; draw(); const i = $('[data-act="topic-q"]'); i?.focus(); i?.setSelectionRange(pos, pos); }, 200);
+    return;
+  }
   if (e.target.dataset?.act !== 'search') return;
   app.search = e.target.value;
   clearTimeout(app._t); app._t = setTimeout(() => { const pos = e.target.selectionStart; draw(); const i = $('[data-act="search"]'); i?.focus(); i?.setSelectionRange(pos, pos); }, 200);

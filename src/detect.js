@@ -154,6 +154,7 @@ export async function detectScreens(root, slots, assetRoot = '') {
   // 1b) game data (data.json…): top-level key → assets named inside it ({"tiers":[{"bg":"bg2"}]} → tiers: bg2)
   const IMG_FIELD = /^(bg|background|icon|img|image|sprite|texture|src|frame|pic|art|avatar|banner|thumb|cover)s?$/i;
   const dataKeys = new Map();
+  const dataTopics = [];   // levels / rooms / items listed in game data, one topic per entry
   for (const f of files.filter((x) => /\.json$/i.test(x.path) && !/(package|tsconfig|capacitor|manifest|lock)/i.test(x.path))) {
     let data; try { data = JSON.parse(await f.file.text()); } catch { continue; }
     if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
@@ -167,6 +168,23 @@ export async function detectScreens(root, slots, assetRoot = '') {
       };
       visit(val, top);
       if (found.size && found.size <= 40) dataKeys.set(top, [...found]);
+      const type = topicType(top);
+      if (type && Array.isArray(val) && val.length >= 2 && val.length <= 500) {
+        const label = TOPIC_LABEL[type];
+        val.forEach((entry, i) => {
+          if (!entry || typeof entry !== 'object') return;
+          const hits = new Set();
+          const v2 = (v, field) => {
+            if (typeof v === 'string') { for (const s of resolve(v, IMG_FIELD.test(field || '') ? 'any' : false).hits) hits.add(s); }
+            else if (Array.isArray(v)) v.forEach((x) => v2(x, field));
+            else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) v2(x, k);
+          };
+          v2(entry, top);
+          if (!hits.size) return;
+          const title = typeof entry.name === 'string' ? entry.name : typeof entry.title === 'string' ? entry.title : typeof entry.id === 'string' ? entry.id : '';
+          dataTopics.push({ key: `${f.path}:${top}#${i}`, id: `${top}_${i + 1}`, kind: type, n: i + 1, name: `${label} ${i + 1}${title ? ' · ' + title : ''}`, file: f.path, slots: new Set([...hits].map((s) => s.id)), dyn: new Set(), order: i });
+        });
+      }
     }
   }
   const dataRe = dataKeys.size ? new RegExp(`\\.(${[...dataKeys.keys()].map((k) => k.replace(/[^\w$]/g, '')).filter(Boolean).join('|')})\\b`, 'g') : null;
@@ -228,12 +246,43 @@ export async function detectScreens(root, slots, assetRoot = '') {
     screens.set(f.path, { key: f.path, kind: POPUP_WORD.test(nm) ? 'popup' : 'screen', name: `${POPUP_WORD.test(nm) ? 'Popup' : 'Màn'} ${humanize(nm)}`, file: f.path, id: nm, slots: new Set(hits.map((s) => s.id)), dyn: new Set(), order: order++ });
   }
 
+  // 5) rooms / levels from folder and file names (rooms/room_2/…, lv3_bg.png, room_1.webp) and from game data
+  const named = new Map();
+  for (const s of slots) {
+    const m = s.id.replace(/\.[^.]+$/, '').match(NAME_TOPIC); if (!m) continue;
+    const type = topicType(m[1]), n = +m[2], k = `${type}:${n}`;
+    if (!named.has(k)) named.set(k, { type, n, slots: new Set() });
+    named.get(k).slots.add(s.id);
+  }
+  const perType = new Map(); for (const t of named.values()) perType.set(t.type, (perType.get(t.type) || 0) + 1);
+  for (const t of named.values()) {
+    if (perType.get(t.type) < 2) continue;   // one "stage_1" alone is just a file name
+    // "room_2.webp" + the 2nd entry of data "tiers"/"rooms" are the same room
+    const d = dataTopics.find((x) => x.kind === t.type && x.n === t.n);
+    if (d) { t.slots.forEach((id) => d.slots.add(id)); continue; }
+    const key = `name:${t.type}${t.n}`;
+    screens.set(key, { key, kind: t.type, name: `${TOPIC_LABEL[t.type]} ${t.n}`, file: 'tên file / thư mục', id: `${t.type}_${t.n}`, slots: t.slots, dyn: new Set(), order: 1000 + t.n });
+  }
+  for (const d of dataTopics) screens.set(d.key, d);
+
+  const rank = { screen: 0, popup: 1, room: 2, level: 3, item: 4 };
   const out = [...screens.values()].filter((s) => s.slots.size || s.dyn.size)
-    .sort((a, b) => (a.kind === b.kind ? a.order - b.order : a.kind === 'screen' ? -1 : 1))
+    .sort((a, b) => (a.kind === b.kind ? a.order - b.order : (rank[a.kind] ?? 9) - (rank[b.kind] ?? 9)))
     .map((s) => ({ key: s.key, id: s.id, kind: s.kind, name: s.name, file: s.file, slots: [...s.slots], dyn: [...s.dyn] }));
   const used = new Set(out.flatMap((s) => s.slots));
   return { screens: out, unassigned: [...unassigned].filter((id) => !used.has(id)), scanned: files.length };
 }
+
+/** Topic kinds besides screens / popups. "items" counts as its own kind (in some games each item is a level). */
+export const TOPIC_LABEL = { room: 'Room', level: 'Level', item: 'Item' };
+function topicType(word) {
+  const w = word.toLowerCase().replace(/s$/, '');
+  if (/^(level|lvl|lv|stage|round|puzzle)$/.test(w)) return 'level';
+  if (/^(room|chapter|world|area|map|zone|tier|house|floor|scene)$/.test(w)) return 'room';
+  if (/^(item|object|product)$/.test(w)) return 'item';
+  return null;
+}
+const NAME_TOPIC = /(?:^|[\/_\-\s])(rooms?|levels?|lvl|lv|stages?|chapters?|worlds?|areas?|maps?|zones?|floors?)[\s_\-]?0*(\d{1,3})(?=$|[\/_\-\s.])/i;
 
 async function getRel(root, path) {
   const parts = path.split('/'); const name = parts.pop(); let d = root;
