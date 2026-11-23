@@ -61,6 +61,24 @@ const b64 = async (blob) => {
   return btoa(s);
 };
 
+/** Which of `paths` (repo-relative) are not in the repo on `ref`. Reskins only replace files, so these cannot be pushed. */
+export async function missingPaths(cfg, ref, paths, onProgress) {
+  const base = `${cfg.host.replace(/\/+$/, '')}/api/v4/projects/${encodeURIComponent(cfg.project)}/repository/files/`;
+  const queue = [...paths], missing = []; let done = 0;
+  const worker = async () => {
+    while (queue.length) {
+      const path = queue.shift();
+      try {
+        const res = await fetch(`${base}${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`, { method: 'HEAD', headers: { 'PRIVATE-TOKEN': cfg.token } });
+        if (res.status === 404) missing.push(path);
+      } catch { /* network: let the push itself report it */ }
+      onProgress?.(++done, paths.length);
+    }
+  };
+  await Promise.all([1, 2, 3, 4, 5, 6].map(worker));
+  return missing;
+}
+
 /** Branch names of the project, default branch first. */
 export async function listBranches(cfg) {
   const call = api(cfg), out = [];

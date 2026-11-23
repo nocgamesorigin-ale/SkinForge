@@ -802,6 +802,7 @@ function glDoneView() {
       ${d.script ? `<p>${d.lfs} / ${d.count} file nằm trong <b>Git LFS</b> — trình duyệt không tải được lên kho LFS của GitLab.</p>
         <p>SkinForge đã ghi <code>.reskin/push-reskin.bat</code> (Windows) và <code>.reskin/push-reskin.sh</code> (macOS) vào thư mục game. <b>Bấm đúp file .bat</b>: git trên máy commit đúng ${d.count} file này lên nhánh <code>${esc(d.branch)}</code>${d.newBranch ? ` (nhánh mới, tách từ ${esc(d.base)})` : ''} và push${d.target ? `, mở Merge Request vào <b>${esc(d.target)}</b> — link MR hiện ở dòng <code>remote:</code>` : ''}.</p>
         <p class="muted small">Cần git + Git LFS đã đăng nhập GitLab trên máy. Script không đổi nhánh và không đụng các thay đổi đang dở trong thư mục game.</p>` : ''}
+      ${!d.error && app.glSkipped?.length ? `<div class="chk warn"><i>!</i><div><b>Bỏ qua ${app.glSkipped.length} file không có trong repo</b><span>${app.glSkipped.slice(0, 8).map(esc).join('<br>')}${app.glSkipped.length > 8 ? '<br>…' : ''}</span></div></div>` : ''}
       ${d.error ? `<div class="chk error"><i>✗</i><div><b>${esc(d.error)}</b><span>Ảnh đã được ghi vào thư mục game trên máy — có thể commit / push bằng git như thường.</span></div></div>` : ''}
     </div>
     <footer class="sheet-f"><span class="grow"></span><button class="btn" data-act="gl-close">Đóng</button></footer></div></div>`;
@@ -829,7 +830,21 @@ async function glPush(p, a) {
   F.pref.set(glOptsKey(), { mode: o.mode, existing: o.existing, base: o.base, mr: o.mr, target: o.target });
   try {
     busy('Đang kết nối GitLab…');
-    const isLfs = await GL.lfsMatcher(cfg, newBranch ? o.base : branch);
+    // only files the repo already has can be replaced: a path that is not there means this folder is not laid out like the repo
+    const ref = newBranch ? o.base : branch;
+    const missing = new Set(await GL.missingPaths(cfg, ref, files.map((f) => f.path), (d, t) => busy('Đang so đường dẫn với repo…', d, t)));
+    if (missing.size === files.length) {
+      const ex = [...missing].slice(0, 3);
+      throw new Error(`Không file nào có trong repo ở nhánh ${ref} đúng đường dẫn này (vd ${ex.join(', ')}). `
+        + 'Thư mục game đang mở không khớp cấu trúc repo — hãy mở thư mục đã clone từ GitLab (Fork / git clone), không phải bản giải nén / AssetRipper. '
+        + (cfg.subdir ? `Kiểm tra cả ô “Thư mục dự án Unity trong repo” (đang là “${cfg.subdir}”).` : 'Nếu dự án Unity nằm trong thư mục con của repo thì điền tên thư mục đó trong Kết nối GitLab.'));
+    }
+    if (missing.size) {
+      app.glSkipped = [...missing];
+      for (let i = files.length - 1; i >= 0; i--) if (missing.has(files[i].path)) files.splice(i, 1);
+      toast(`${missing.size} file không có trong repo nên bỏ qua — đẩy ${files.length} file còn lại`, 'warn');
+    } else app.glSkipped = null;
+    const isLfs = await GL.lfsMatcher(cfg, ref);
     const lfs = files.filter((f) => isLfs(f.path)).length;
     if (lfs) {
       const sc = GL.pushScripts({ branch, newBranch, base: o.base, mr, stamp: a.stamp.replace(/[^\w-]+/g, '-') });
